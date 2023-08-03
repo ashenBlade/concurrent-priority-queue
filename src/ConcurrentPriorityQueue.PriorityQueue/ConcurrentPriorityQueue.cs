@@ -1,10 +1,4 @@
-﻿using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
-using System.Diagnostics.Contracts;
-using System.Resources;
-using System.Runtime.CompilerServices;
-using System.Runtime.Intrinsics.X86;
-using System.Security.Cryptography;
+﻿using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("ConcurrentPriorityQueue.PriorityQueue.Tests")]
 
@@ -71,6 +65,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
 
         key = first.Key;
         value = first.Value;
+        Count--;
         return true;
     }
 
@@ -120,6 +115,8 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             //    | left | -> |  new  | ->  | right |
             predecessors[level].Successors[level] = node;
         }
+
+        Count++;
     }
 
     // Для заданного ключа получить список всех ближайших левых (ключ меньше) узлов

@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Runtime.CompilerServices;
 using Xunit.Sdk;
 
 namespace ConcurrentPriorityQueue.PriorityQueue.Tests;
@@ -114,5 +115,37 @@ public class ConcurrentPriorityQueueTests
         var actual = queue.GetStoredData();
         var expected = new[] {( greaterKey, data )};
         Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void Count__КогдаОчередьПуста__ДолженВернуть0()
+    {
+        var queue = CreateQueue();
+        Assert.Equal(0, queue.Count);
+    }
+
+    [Fact]
+    public void Count__КогдаВОчереди1Элемент__ДолженВернуть1()
+    {
+        var queue = CreateQueue();
+        queue.Enqueue(1, 1);
+        Assert.Equal(1, queue.Count);
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(5)]
+    [InlineData(10)]
+    [InlineData(15)]
+    public void Count__КогдаВОчередьНесколькоЭлементов__ДолженВернутьИхКоличество(int count)
+    {
+        var queue = CreateQueue();
+        for (int i = 0; i < count; i++)
+        {
+            queue.Enqueue(i, i);
+        }
+        
+        Assert.Equal(count, queue.Count);
     }
 }
