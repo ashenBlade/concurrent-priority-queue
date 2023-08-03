@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("ConcurrentPriorityQueue.PriorityQueue.Tests")]
 
@@ -83,56 +84,70 @@ public class ConcurrentPriorityQueue<TKey, TValue>
 
     public void Enqueue(TKey key, TValue value)
     {
-        // 1. Найти место, куда нужно вставить элемент
-        var predecessors = GetPredecessors(key);
+        // 1. Находим место, куда нужно вставить элемент
+        var (predecessors, successors) = GetLocation(key);
         
-        // 2. Обновить список
+        // 2. Аллоцируем память, под узел
         var height = _random.Next(1, _height);
-        var successors = new SkipListNode<TKey, TValue>[height];
         var node = new SkipListNode<TKey, TValue>()
         {
             Key = key, 
             Value = value,
-            Successors = successors
+            Successors = new SkipListNode<TKey, TValue>[height]
         };
-        for (int level = height - 1; level >= 0; level--)
+        
+        // 3. Пытаемся вставить в список на 1 уровне.
+        //    Эта операция аналогична добавлению узла в сам список
+
+        while (true)
         {
-            // Новый узел на текущем уровне будет указывать на узел, на который указывал старый узел
-            // Было:
-            //    | left | -> | right |
-            // 
-            // Стало:
-            //    | left |              ->  | right |
-            //                |  new  | ->  | right | 
-            successors[level] = predecessors[level].Successors[level];
+            node.Successors[0] = successors[0];
+            var old = Interlocked.CompareExchange(ref predecessors[0].Successors[0], node, successors[0]);
+            if (old == successors[0])
+            {
+                // Успешно добавили узел в список.
+                break;
+            }
+            // Заново рассчитываем предшественников и последователей
+            ( predecessors, successors ) = GetLocation(key);
+        }
+        
+        // 4. Постепенно наращиваем высоту нового узла, обновляя ссылки на него у других
+        for (int level = 1; level < height; level++)
+        {
+            node.Successors[level] = successors[level];
             
-            // Обновляем ссылку у left, чтобы указывал на новый узел
-            // Было:
-            //    | left |              ->  | right |
-            //                |  new  | ->  | right |
-            // 
-            // Стало:
-            //    | left | -> |  new  | ->  | right |
-            predecessors[level].Successors[level] = node;
+            var old = Interlocked.CompareExchange(
+                ref predecessors[level].Successors[level],
+                node, 
+                successors[level]);
+            if (old != successors[level])
+            {
+                // За время простоя кто-то модифицировал список.
+                // Пока просто прекращаем наращивание высоты
+                break;
+            }
         }
 
         Count++;
     }
 
     // Для заданного ключа получить список всех ближайших левых (ключ меньше) узлов
-    private SkipListNode<TKey, TValue>[] GetPredecessors(TKey key)
+    private (SkipListNode<TKey, TValue>[] Predecessors, SkipListNode<TKey, TValue>[] Successors) GetLocation(TKey key)
     {
         // P.S. лучше заменить на пулинг 
         
         // Элементы слева
         var predecessors = new SkipListNode<TKey, TValue>[_height];
+        var successors = new SkipListNode<TKey, TValue>[_height];
         // Начинаем перебирать все узлы начиная слева сверху (самый верхний уровень головы)
         var left = _head;
         for (int height = _height - 1; height >= 0; height--)
         {
             // Находим первый узел, ключ которого больше требуемого
             var next = left.Successors[height];
-            while (!( IsTail( next ) || IsLessThan(key, next.Key) )) 
+            while (!( IsTail( next ) || 
+                      IsLessThan(key, next.Key) )) 
             {
                 left = next;
                 next = next.Successors[height];
@@ -140,9 +155,10 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             
 
             predecessors[height] = left;
+            successors[height] = next;
         }
 
-        return predecessors;
+        return ( predecessors, successors );
     }
 
     private bool IsTail(SkipListNode<TKey, TValue> node) => node == _tail;

@@ -31,7 +31,7 @@ public class ConcurrentPriorityQueueTests
     [InlineData(0, 3)]
     [InlineData(0, int.MaxValue)]
     [InlineData(int.MinValue, int.MaxValue)]
-    public void Enqueue__КогдаВОчереди1ЭлементИДобавиляемыйКлючБольше__ДолженДобавитьКлючПослеЭлемента(int lesserKey, int greaterKey)
+    public void Enqueue__КогдаВОчереди1ЭлементИДобавляемыйКлючБольше__ДолженДобавитьКлючПослеЭлемента(int lesserKey, int greaterKey)
     {
         var queue = CreateQueue();
         var value = 123;
@@ -40,15 +40,7 @@ public class ConcurrentPriorityQueueTests
         queue.Enqueue(greaterKey, value);
 
         var data = queue.GetStoredData();
-        try
-        {
-            Assert.Equal(new[]{(lesserKey, value), (greaterKey, value)}, data);
-        }
-        catch (EqualException e)
-        {
-            Console.WriteLine(e);
-            throw;
-        }
+        Assert.Equal(new[]{(lesserKey, value), (greaterKey, value)}, data);
     }
 
     [Theory]
@@ -147,5 +139,47 @@ public class ConcurrentPriorityQueueTests
         }
         
         Assert.Equal(count, queue.Count);
+    }
+
+    [Fact]
+    public void Enqueue__КогдаКладется2ЭлементаСОдинаковымКлючом__ДолженСохранитьВПорядкеДобавления()
+    {
+        var key = 1;
+        var dataFirst = 90;
+        var dataSecond = 400;
+        var queue = CreateQueue();
+        
+        queue.Enqueue(key, dataFirst);
+        queue.Enqueue(key, dataSecond);
+
+        var actualDataFirst = queue.Dequeue(out var actualKeyFirst);
+        var actualDataSecond = queue.Dequeue(out var actualKeySecond);
+        
+        Assert.Equal(new[]{(key, dataFirst), (key, dataSecond)}, new[]{(actualKeyFirst, actualDataFirst), (actualKeySecond, actualDataSecond)});
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(50)]
+    [InlineData(100)]
+    [InlineData(150)]
+    [InlineData(200)]
+    public void Enqueue__КогдаОдновременноДобавляетсяМножествоЭлементов__ДолженДобавитьВсеЭлементы(int elementsCount)
+    {
+        var queue = CreateQueue();
+        var elements = Enumerable.Range(0, elementsCount)
+                                 .Select(i => ( Priority: Random.Shared.Next(), Data: Random.Shared.Next() ))
+                                 .ToArray();
+        var tasks = elements
+                   .Select(pair => Task.Run(() =>
+                    {
+                        queue.Enqueue(pair.Priority, pair.Data);
+                    }))
+                   .ToArray();
+        Task.WaitAll(tasks);
+
+        var actual = queue.GetStoredData().ToHashSet();
+        var expected = elements.ToHashSet();
+        Assert.Equal(expected, actual);
     }
 }
