@@ -6,27 +6,34 @@ using System.Runtime.CompilerServices;
 
 namespace ConcurrentPriorityQueue.PriorityQueue;
 
-// Этапы:
-// 1. Очередь с приоритетами на SkipList
-//  1.1 Enqueue
-//  1.2 Dequeue
-//  1.3 Count
-
-// 2. Конкурентная очередь
-//  2.1 Enqueue
-//  2.2 Dequeue
-//  2.3 Count
-
 public class ConcurrentPriorityQueue<TKey, TValue>
 {
     /// <summary>
-    /// Взял из головы (своей)
+    /// Максимальное количество логически удаленных узлов по умолчанию
     /// </summary>
-    private const int DefaultDeleteThreshold = 1000;
+    /// <remarks>
+    /// Взял из головы
+    /// </remarks>
+    private const int DefaultDeleteThreshold = 10;
 
-    public int Count => GetCount();
+    /// <summary>
+    /// Максимальная высота списка по умолчанию
+    /// </summary>
+    /// <remarks>
+    /// Взял из головы
+    /// </remarks>
+    private const int DefaultHeight = 20;
 
-    private int GetCount()
+    /// <summary>
+    /// Получить текущее количество элементов в очереди.
+    /// </summary>
+    /// <remarks>
+    /// При каждом вызове делается новое вычисление,
+    /// вместо постоянного обновления значения через <see cref="Interlocked"/>
+    /// </remarks>
+    public int Count => GetAliveNodesCount();
+
+    private int GetAliveNodesCount()
     {
         var node = _head.Successors[0];
         var count = 0;
@@ -49,23 +56,39 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     /// Максимальная высота списка
     /// </summary>
     private readonly int _height;
-    private readonly Random _random = Random.Shared;
-    private readonly IComparer<TKey> _comparer;
     
+    /// <summary>
+    /// <see cref="Random"/> для вычисления высоты списка
+    /// </summary>
+    private readonly Random _random = Random.Shared;
+    
+    /// <summary>
+    /// Сравнитель ключей
+    /// </summary>
+    private readonly IComparer<TKey> _comparer;
+
     /// <summary>
     /// Максимальное количество хранимых логически удаленных узлов
     /// </summary>
-    private readonly int _deleteThreshold = DefaultDeleteThreshold;
+    private readonly int _deleteThreshold;
     
-    public ConcurrentPriorityQueue(int height, IComparer<TKey>? comparer = null)
+    
+    public ConcurrentPriorityQueue(int height = DefaultHeight, int deleteThreshold = DefaultDeleteThreshold, IComparer<TKey>? comparer = null)
     {
         if (height < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(height), height, "Высота списка должна быть положительной");
         }
 
+        if (deleteThreshold < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(deleteThreshold), deleteThreshold,
+                "Предел хранящихся удаленных элементов не может быть отрицательным");
+        }
+        
         ( _head, _tail ) = CreateHeadAndTail(height);
         _height = height;
+        _deleteThreshold = deleteThreshold;
         _comparer = comparer ?? Comparer<TKey>.Default;
     }
 
@@ -115,19 +138,6 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 continue;
             }
 
-            // lock (currentHead)
-            // {
-            //     if (!currentHead.Deleted)
-            //     {
-            //         currentHead.Deleted = true;
-            //         deletedCount++;
-            //         break;
-            //     }
-            //     
-            //     currentHead = currentHead.Successors[0];
-            //     deletedCount++;                
-            // }
-            
             taken = false;
             currentHead.UpdateLock.Enter(ref taken);
             try
@@ -264,8 +274,8 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             pred.UpdateLock.Enter(ref taken);
             try
             {
-                if (pred.Successors[0] == successors[0] && 
-                    !pred.Deleted)
+                if (pred.Successors[0] == successors[0] 
+                 && !successors[0].Deleted)
                 {
                     pred.Successors[0] = node;
                     break;

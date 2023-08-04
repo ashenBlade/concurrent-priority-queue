@@ -1,15 +1,10 @@
 using System.Collections.Concurrent;
-using System.Linq.Expressions;
-using System.Runtime.CompilerServices;
-using Xunit.Sdk;
 
 namespace ConcurrentPriorityQueue.PriorityQueue.Tests;
 
 public class ConcurrentPriorityQueueTests
 {
-    public const int DefaultHeight = 10;
-
-    private static ConcurrentPriorityQueue<int, int> CreateQueue() => new(DefaultHeight);
+    private static ConcurrentPriorityQueue<int, int> CreateQueue() => new();
 
     [Fact]
     public void Enqueue__КогдаОчередьПуста__ДолженДобавить1Элемент()
@@ -217,6 +212,52 @@ public class ConcurrentPriorityQueueTests
 
         var actual = stored.ToHashSet();
         var expected = elements.ToHashSet();
+        Assert.Equal(expected, actual);
+    }
+    
+    [Theory]
+    [InlineData(50)]
+    [InlineData(100)]
+    [InlineData(150)]
+    [InlineData(200)]
+    [InlineData(250)]
+    [InlineData(500)]
+    public async Task EnqueueTryDequeue__КогдаВыполняютсяОдновременно__ДолжныПравильноОбработатьВсеОперации(int elementsCount)
+    {
+        var elements = Enumerable.Range(0, elementsCount)
+                                 .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
+                                 .ToArray();
+        var tcs = new TaskCompletionSource();
+        var queue = CreateQueue();
+        var dequeued = new ConcurrentQueue<(int Key, int Value)>();
+        var enqueueTasks = elements.Select(p => Task.Run(async () =>
+        {
+            await tcs.Task;
+            queue.Enqueue(p.Key, p.Value);
+        }));
+        var dequeueTasks = Enumerable.Range(0, elementsCount)
+                                     .Select(_ => Task.Run(async () =>
+                                      {
+                                          await tcs.Task;
+                                          if (queue.TryDequeue(out var key, out var value))
+                                          {
+                                              dequeued.Enqueue((key, value));
+                                          }
+                                      }));
+        var tasks = enqueueTasks
+                   .Concat(dequeueTasks)
+                   .ToArray();
+        var waitTask = Task.WhenAll(tasks);
+        tcs.SetResult();
+        await waitTask;
+
+        while (queue.TryDequeue(out var key, out var value))
+        {
+            dequeued.Enqueue((key, value));
+        }
+
+        var expected = elements.ToHashSet();
+        var actual = dequeued.ToHashSet();
         Assert.Equal(expected, actual);
     }
 }
