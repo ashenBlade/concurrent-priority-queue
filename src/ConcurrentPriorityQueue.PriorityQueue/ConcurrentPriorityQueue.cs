@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Data;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("ConcurrentPriorityQueue.PriorityQueue.Tests")]
@@ -18,12 +19,43 @@ namespace ConcurrentPriorityQueue.PriorityQueue;
 
 public class ConcurrentPriorityQueue<TKey, TValue>
 {
-    public int Count { get; private set; }
+    /// <summary>
+    /// Взял из головы (своей)
+    /// </summary>
+    private const int DefaultDeleteThreshold = 1000;
+
+    public int Count => GetCount();
+
+    private int GetCount()
+    {
+        var node = _head.Successors[0];
+        var count = 0;
+        while (!IsTail(node))
+        {
+            if (!node.Deleted)
+            {
+                count++;
+            }
+            node = node.Successors[0];
+        }
+
+        return count;
+    }
+
     private readonly SkipListNode<TKey, TValue> _head;
     private readonly SkipListNode<TKey, TValue> _tail;
+    
+    /// <summary>
+    /// Максимальная высота списка
+    /// </summary>
     private readonly int _height;
     private readonly Random _random = Random.Shared;
     private readonly IComparer<TKey> _comparer;
+    
+    /// <summary>
+    /// Максимальное количество хранимых логически удаленных узлов
+    /// </summary>
+    private readonly int _deleteThreshold = DefaultDeleteThreshold;
     
     public ConcurrentPriorityQueue(int height, IComparer<TKey>? comparer = null)
     {
@@ -48,26 +80,149 @@ public class ConcurrentPriorityQueue<TKey, TValue>
 
     public bool TryDequeue(out TKey key, out TValue value)
     {
-        var first = _head.Successors[0];
+        // Текущая голова списка
+        var currentHead = _head.Successors[0];
         
-        if (IsTail(first))
+        // Запоминаем старую голову списка, чтобы избежать гонки при удалении старых узлов
+        var observedHead = currentHead;
+        
+        // Количество пройденных удаленных узлов
+        var deletedCount = 0;
+        
+        // Здесь храним новую голову списка 
+        var newHead = ( SkipListNode<TKey, TValue>? ) null;
+        
+        bool taken;
+        while (true)
         {
-            // Список пуст, возвращаем false
-            key = default!;
-            value = default!;
-            return false;
+            if (IsTail(currentHead))
+            {
+                key = default!;
+                value = default!;
+                return false;
+            }
+
+            if (currentHead.Inserting && 
+                newHead is null)
+            {
+                newHead = currentHead;
+            }
+
+            if (currentHead.Deleted)
+            {
+                deletedCount++;
+                currentHead = currentHead.Successors[0];
+                continue;
+            }
+
+            // lock (currentHead)
+            // {
+            //     if (!currentHead.Deleted)
+            //     {
+            //         currentHead.Deleted = true;
+            //         deletedCount++;
+            //         break;
+            //     }
+            //     
+            //     currentHead = currentHead.Successors[0];
+            //     deletedCount++;                
+            // }
+            
+            taken = false;
+            currentHead.UpdateLock.Enter(ref taken);
+            try
+            {
+                if (!currentHead.Deleted)
+                {
+                    currentHead.Deleted = true;
+                    deletedCount++;
+                    break;
+                }
+            }
+            finally
+            {
+                if (taken) { currentHead.UpdateLock.Exit(); }
+            }
+            currentHead = currentHead.Successors[0];
+            deletedCount++;
         }
-        
-        // Обновляем ссылки на следующие элементы в голове списка
-        for (int level = first.Successors.Length - 1; level >= 0; level--)
+        // На этом моменте, в currentHead хранится узел, который мы удалили
+
+        if (deletedCount < _deleteThreshold)
         {
-            _head.Successors[level] = first.Successors[level];
+            key = currentHead.Key;
+            value = currentHead.Value;
+            return true;
         }
 
-        key = first.Key;
-        value = first.Value;
-        Count--;
+        // На данный момент, если newHead не null, то содержит узел, который был в процесссе вставки в момент обхода.
+        newHead ??= currentHead;
+
+        taken = false;
+        var updated = false;
+        _head.UpdateLock.Enter(ref taken);
+        try
+        {
+            if (_head.Successors[0] == observedHead)
+            {
+                _head.Successors[0] = newHead;
+                updated = true;
+            }
+        }
+        finally
+        {
+            if (taken) { _head.UpdateLock.Exit(); }
+        }
+
+        if (updated)
+        {
+            Restructure();
+        }
+
+        key = currentHead.Key;
+        value = currentHead.Value;
         return true;
+    }
+
+    private void Restructure()
+    {
+        // Переделать под новую логику, где флаги удаления хранятся у меня
+        var i = _height - 1;
+        var pred = _head;
+        while (i > 0)
+        {
+            // Запоминаем старую голову списка, чтобы при обновлении не задеть новую
+            var savedHead = _head.Successors[i];
+            var next = pred.Successors[i];
+            if (!savedHead.Deleted)
+            {
+                i--;
+                continue;
+            }
+
+            while (next.Deleted)
+            {
+                pred = next;
+                next = pred.Successors[i];
+            }
+
+            var taken = false;
+            _head.UpdateLock.Enter(ref taken);
+            try
+            {
+                if (_head.Successors[i] == savedHead)
+                {
+                    // В голову списка нужно класть только удаленные узлы, так как в противном случае
+                    // перед живым узлом могут вставить узел с меньшим ключом, но мы его потеряем
+                    _head.Successors[i] = pred.Successors[i];
+                    i--;
+                }
+            }
+            finally
+            {
+                if (taken) { _head.UpdateLock.Exit(); }
+            }
+        }
     }
 
     public TValue Dequeue() => Dequeue(out _);
@@ -85,7 +240,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     public void Enqueue(TKey key, TValue value)
     {
         // 1. Находим место, куда нужно вставить элемент
-        var (predecessors, successors) = GetLocation(key);
+        var (predecessors, successors, lastDeleted) = GetInsertLocation(key);
         
         // 2. Аллоцируем память, под узел
         var height = _random.Next(1, _height);
@@ -93,94 +248,135 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         {
             Key = key, 
             Value = value,
-            Successors = new SkipListNode<TKey, TValue>[height]
+            Successors = new SkipListNode<TKey, TValue>[height],
+            Inserting = true
         };
         
         // 3. Пытаемся вставить в список на 1 уровне.
         //    Эта операция аналогична добавлению узла в сам список
-
+        var taken = false;
         while (true)
         {
             node.Successors[0] = successors[0];
-            var old = Interlocked.CompareExchange(ref predecessors[0].Successors[0], node, successors[0]);
-            if (old == successors[0])
-            {
-                // Успешно добавили узел в список.
-                break;
-            }
-            // Заново рассчитываем предшественников и последователей
-            ( predecessors, successors ) = GetLocation(key);
-        }
-        
-        // 4. Постепенно наращиваем высоту нового узла, обновляя ссылки на него у других
-        for (int level = 1; level < height; level++)
-        {
-            node.Successors[level] = successors[level];
+            var pred = predecessors[0];
             
-            var old = Interlocked.CompareExchange(
-                ref predecessors[level].Successors[level],
-                node, 
-                successors[level]);
-            if (old != successors[level])
+            taken = false;
+            pred.UpdateLock.Enter(ref taken);
+            try
             {
-                // За время простоя кто-то модифицировал список.
-                // Пока просто прекращаем наращивание высоты
-                break;
+                if (pred.Successors[0] == successors[0] && 
+                    !pred.Deleted)
+                {
+                    pred.Successors[0] = node;
+                    break;
+                }
             }
+            finally
+            {
+                if (taken) { pred.UpdateLock.Exit(); }
+            }
+            
+            // Заново рассчитываем предшественников и последователей
+            ( predecessors, successors, lastDeleted ) = GetInsertLocation(key);
         }
 
-        Count++;
+        // 4. Постепенно наращиваем высоту вставляемого узла
+        var i = 1;
+        while (i < height)
+        {
+            if (node.Deleted || 
+                successors[i].Deleted || 
+                successors[i] == lastDeleted)
+            {
+                // Узел был удален в процессе вставки
+                break;
+            }
+
+            node.Successors[i] = successors[i];
+            
+            taken = false;
+            predecessors[i].UpdateLock.Enter(ref taken);
+            try
+            {
+                if (predecessors[i].Successors[i] == successors[i])
+                {
+                    predecessors[i].Successors[i] = node;
+                }
+                else
+                {
+                    // Что делать с дубликатами ключей подумаю потом
+                    break;
+                }
+            }
+            finally
+            {
+                if (taken) { predecessors[i].UpdateLock.Exit(); }
+            }
+
+            i++;
+        }
+
+        node.Inserting = false;
     }
 
     // Для заданного ключа получить список всех ближайших левых (ключ меньше) узлов
-    private (SkipListNode<TKey, TValue>[] Predecessors, SkipListNode<TKey, TValue>[] Successors) GetLocation(TKey key)
+    private (SkipListNode<TKey, TValue>[] Predecessors, SkipListNode<TKey, TValue>[] Successors, SkipListNode<TKey, TValue>? LastDeleted) GetInsertLocation(TKey key)
     {
         // P.S. лучше заменить на пулинг 
-        
-        // Элементы слева
+        var pred = _head;
+        // Последний удаленный узел
+        var lastDeleted = ( SkipListNode<TKey, TValue>? ) null;
+        // Предшествующие узлы
         var predecessors = new SkipListNode<TKey, TValue>[_height];
+        // Последующие узлы
         var successors = new SkipListNode<TKey, TValue>[_height];
-        // Начинаем перебирать все узлы начиная слева сверху (самый верхний уровень головы)
-        var left = _head;
-        for (int height = _height - 1; height >= 0; height--)
+        var i = _height - 1;
+        while (0 <= i)
         {
-            // Находим первый узел, ключ которого больше требуемого
-            var next = left.Successors[height];
-            while (!( IsTail( next ) || 
-                      IsLessThan(key, next.Key) )) 
+            var current = pred.Successors[i];
+            while (!IsTail(current) && 
+                   (
+                       IsLessOrEqualThan(current.Key, key)
+                    || current.Deleted
+                    || ( pred.Deleted && i == 0 ) )
+                  )
             {
-                left = next;
-                next = next.Successors[height];
-            }
-            
+                if (pred.Deleted && i == 0)
+                {
+                    lastDeleted = current;
+                }
 
-            predecessors[height] = left;
-            successors[height] = next;
+                pred = current;
+                current = pred.Successors[i];
+            }
+
+            predecessors[i] = pred;
+            successors[i] = current;
+            i--;
         }
 
-        return ( predecessors, successors );
+        return ( predecessors, successors, lastDeleted );
     }
 
     private bool IsTail(SkipListNode<TKey, TValue> node) => node == _tail;
     private bool IsHead(SkipListNode<TKey, TValue> node) => node == _head;
     
     /// <summary>
-    /// left &lt; right
+    /// left &lt;= right
     /// </summary>
-    private bool IsLessThan(TKey left, TKey right)
+    private bool IsLessOrEqualThan(TKey left, TKey right)
     {
-        return _comparer.Compare(left, right) < 0;
+        return _comparer.Compare(left, right) <= 0;
     }
 
     // Для тестов
     internal IReadOnlyList<(TKey Key, TValue Value)> GetStoredData()
     {
         var result = new List<(TKey, TValue)>();
-        var element = _head.Successors[0];
-        while (!IsTail(element))
+
+        while (TryDequeue(out var key, out var value))
         {
-            result.Add((element.Key, element.Value));
-            element = element.Successors[0];
+            result.Add(( key, value ));
         }
 
         return result;

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using Xunit.Sdk;
@@ -8,8 +9,7 @@ public class ConcurrentPriorityQueueTests
 {
     public const int DefaultHeight = 10;
 
-    private static ConcurrentPriorityQueue<int, int> CreateQueue() =>
-        new ConcurrentPriorityQueue<int, int>(DefaultHeight);
+    private static ConcurrentPriorityQueue<int, int> CreateQueue() => new(DefaultHeight);
 
     [Fact]
     public void Enqueue__КогдаОчередьПуста__ДолженДобавить1Элемент()
@@ -164,7 +164,8 @@ public class ConcurrentPriorityQueueTests
     [InlineData(100)]
     [InlineData(150)]
     [InlineData(200)]
-    public void Enqueue__КогдаОдновременноДобавляетсяМножествоЭлементов__ДолженДобавитьВсеЭлементы(int elementsCount)
+    [InlineData(500)]
+    public void Enqueue__КогдаПараллельноДобавляютсяМножествоЭлементов__ДолженДобавитьВсеЭлементы(int elementsCount)
     {
         var queue = CreateQueue();
         var elements = Enumerable.Range(0, elementsCount)
@@ -179,6 +180,42 @@ public class ConcurrentPriorityQueueTests
         Task.WaitAll(tasks);
 
         var actual = queue.GetStoredData().ToHashSet();
+        var expected = elements.ToHashSet();
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(20)]
+    [InlineData(50)]
+    [InlineData(100)]
+    [InlineData(150)]
+    [InlineData(200)]
+    [InlineData(500)]
+    public async Task TryDequeue__КогдаВыполняютсяПараллельноСтолькоСколькоЭлементовВОчереди__ДолжныВернутьТеЖеЭлементы(
+        int elementsCount)
+    {
+        var elements = Enumerable.Range(0, elementsCount)
+                                 .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
+                                 .ToArray();
+
+        var queue = CreateQueue();
+        Array.ForEach(elements, tuple => queue.Enqueue(tuple.Key, tuple.Value));
+
+        var stored = new ConcurrentQueue<(int Key, int Value)>();
+        var tasks = new Task[elementsCount];
+        for (var i = 0; i < tasks.Length; i++)
+        {
+            tasks[i] = Task.Run(() =>
+            {
+                var value = queue.Dequeue(out var key);
+                stored.Enqueue(( key, value ));
+            });
+        }
+
+        await Task.WhenAll(tasks);
+
+        var actual = stored.ToHashSet();
         var expected = elements.ToHashSet();
         Assert.Equal(expected, actual);
     }

@@ -17,4 +17,19 @@ internal class SkipListNode<TKey, TValue>
     /// Каждый индекс соответствует своему уровню, начиная снизу.
     /// </summary>
     public SkipListNode<TKey, TValue>[] Successors = null!;
+
+    /// <summary>
+    /// Узел логически удален
+    /// </summary>
+    public volatile bool Deleted;
+    
+    /// <summary>
+    /// Узел находится в процессе вставки
+    /// </summary>
+    public volatile bool Inserting;
+
+    /// <summary>
+    /// Блокировка на время обновления узла
+    /// </summary>
+    public SpinLock UpdateLock = new();
 }
