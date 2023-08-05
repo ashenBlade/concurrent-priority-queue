@@ -291,4 +291,120 @@ public class ConcurrentPriorityQueueTests
         var storedCount = queue.GetStoredNodesCountRaw();
         Assert.True(storedCount < deleteThreshold);
     }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(15)]
+    [InlineData(20)]
+    [InlineData(25)]
+    [InlineData(50)]
+    [InlineData(100)]
+    public async Task Enqueue__КогдаПараллельноДобавляютсяЭлементыСОдинаковымиКлючами__ДолженДобавитьВсеКорректно(
+        int elementsCount)
+    {
+        var key = 1;
+        var elements = Enumerable.Range(0, elementsCount)
+                                 .Select(_ => ( Key: key, Value: Random.Shared.Next() ))
+                                 .ToArray();
+        var cts = new TaskCompletionSource();
+        var queue = CreateQueue();
+        var enqueueTasks = elements.Select(tuple => Task.Run(async () =>
+                                    {
+                                        await cts.Task;
+                                        queue.Enqueue(tuple.Key, tuple.Value);
+                                    }))
+                                   .ToArray();
+        var waitTask = Task.WhenAll(enqueueTasks);
+        cts.SetResult();
+        await waitTask;
+
+        var actual = queue.DequeueAll().ToHashSet();
+        var expected = elements.ToHashSet();
+        
+        Assert.Equal(expected, actual);
+    }
+
+    private static void Shuffle<T>(T[] array)
+    {
+        var i = 0;
+        while (i < array.Length)
+        {
+            var j = Random.Shared.Next(array.Length);
+            if (j != i)
+            {
+                ( array[i], array[j] ) = ( array[j], array[i] );
+                i++;
+            }
+        }
+    } 
+
+    [Theory]
+    [InlineData(10, 5)]
+    [InlineData(10, 10)]
+    [InlineData(50, 50)]
+    [InlineData(50, 100)]
+    [InlineData(50, 12)]
+    public async Task Enqueue__КогдаДобавляютсяОдинаковыеИРазныеКлючиБольше__ДолженДобавитьВсеЭлементы(
+        int identicalKeysCount,
+        int distinctKeysCount)
+    {
+        const int identicalKey = 1;
+        var identicalKeys = Enumerable.Range(0, identicalKeysCount)
+                                      .Select(_ => ( Key: identicalKey, Value: Random.Shared.Next() ));
+        var distinctKeys = Enumerable.Range(1, distinctKeysCount)
+                                     .Select(key => ( Key: key, Value: Random.Shared.Next() ));
+        var elements = identicalKeys.Concat(distinctKeys).ToArray();
+        Shuffle(elements);
+
+        var queue = CreateQueue();
+        var tcs = new TaskCompletionSource();
+        var waitTask = Task.WhenAll( elements.Select(e => Task.Run(async () =>
+        {
+            await tcs.Task;
+            queue.Enqueue(e.Key, e.Value);
+        })).ToArray());
+        
+        tcs.SetResult();
+        
+        await waitTask;
+
+        var actual = queue.DequeueAll().ToHashSet();
+        var expected = elements.ToHashSet();
+        Assert.Equal(expected, actual);
+    }
+    
+    [Theory]
+    [InlineData(10, 5)]
+    [InlineData(10, 10)]
+    [InlineData(50, 50)]
+    [InlineData(50, 100)]
+    [InlineData(50, 12)]
+    public async Task Enqueue__КогдаДобавляютсяОдинаковыеИРазныеКлючиМеньше__ДолженДобавитьВсеЭлементы(
+        int identicalKeysCount,
+        int distinctKeysCount)
+    {
+        const int identicalKey = 1;
+        var identicalKeys = Enumerable.Range(0, identicalKeysCount)
+                                      .Select(_ => ( Key: identicalKey, Value: Random.Shared.Next() ));
+        var distinctKeys = Enumerable.Range(1 - distinctKeysCount, distinctKeysCount)
+                                     .Select(key => ( Key: key, Value: Random.Shared.Next() ));
+        var elements = identicalKeys.Concat(distinctKeys).ToArray();
+        Shuffle(elements);
+
+        var queue = CreateQueue();
+        var tcs = new TaskCompletionSource();
+        var waitTask = Task.WhenAll( elements.Select(e => Task.Run(async () =>
+        {
+            await tcs.Task;
+            queue.Enqueue(e.Key, e.Value);
+        })).ToArray());
+        
+        tcs.SetResult();
+        
+        await waitTask;
+
+        var actual = queue.DequeueAll().ToHashSet();
+        var expected = elements.ToHashSet();
+        Assert.Equal(expected, actual);
+    }
 }

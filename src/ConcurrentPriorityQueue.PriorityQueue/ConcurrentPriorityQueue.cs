@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 
 namespace ConcurrentPriorityQueue.PriorityQueue;
 
+// - Добавить очистку ссылок после логического удаления
 public class ConcurrentPriorityQueue<TKey, TValue>
 {
     /// <summary>
@@ -270,7 +271,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         
             // 3. Пытаемся вставить в список на 1 уровне.
             //    Эта операция аналогична добавлению узла в сам список
-            var taken = false;
+            bool taken;
             while (true)
             {
                 node.Successors[0] = successors[0];
@@ -314,6 +315,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 node.Successors[i] = successors[i];
             
                 taken = false;
+                var broken = false;
                 predecessors[i].UpdateLock.Enter(ref taken);
                 try
                 {
@@ -323,13 +325,24 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                     }
                     else
                     {
-                        // Что делать с дубликатами ключей подумаю потом
-                        break;
+                        broken = true;
                     }
                 }
                 finally
                 {
                     if (taken) { predecessors[i].UpdateLock.Exit(); }
+                }
+
+                if (broken)
+                {
+                    ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(successors);
+                    ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(predecessors);
+                    ( successors, predecessors, lastDeleted ) = GetInsertLocation(key);
+                    if (!ReferenceEquals(predecessors[0], node))
+                    {
+                        // Если добавлен новый
+                        break;
+                    }
                 }
 
                 i++;
@@ -394,8 +407,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     }
 
     private bool IsTail(SkipListNode<TKey, TValue> node) => node == _tail;
-    private bool IsHead(SkipListNode<TKey, TValue> node) => node == _head;
-    
+
     /// <summary>
     /// left &lt;= right
     /// </summary>
