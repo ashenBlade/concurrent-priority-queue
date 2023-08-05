@@ -1,6 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Data;
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("ConcurrentPriorityQueue.PriorityQueue.Tests")]
 
@@ -84,6 +82,12 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         {
             throw new ArgumentOutOfRangeException(nameof(deleteThreshold), deleteThreshold,
                 "Предел хранящихся удаленных элементов не может быть отрицательным");
+        }
+
+        if (deleteThreshold < 2)
+        {
+            throw new ArgumentOutOfRangeException(nameof(deleteThreshold), deleteThreshold,
+                "Предел хранящихся удаленных элементов должен быть не меньше 2");
         }
         
         ( _head, _tail ) = CreateHeadAndTail(height);
@@ -196,7 +200,6 @@ public class ConcurrentPriorityQueue<TKey, TValue>
 
     private void Restructure()
     {
-        // Переделать под новую логику, где флаги удаления хранятся у меня
         var i = _height - 1;
         var pred = _head;
         while (i > 0)
@@ -380,7 +383,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     }
 
     // Для тестов
-    internal IReadOnlyList<(TKey Key, TValue Value)> GetStoredData()
+    internal IReadOnlyList<(TKey Key, TValue Value)> DequeueAll()
     {
         var result = new List<(TKey, TValue)>();
 
@@ -390,5 +393,18 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         }
 
         return result;
+    }
+
+    internal int GetStoredNodesCountRaw()
+    {
+        var node = _head.Successors[0];
+        var count = 0;
+        while (!IsTail(node))
+        {
+            count++;
+            node = node.Successors[0];
+        }
+        
+        return count;
     }
 }

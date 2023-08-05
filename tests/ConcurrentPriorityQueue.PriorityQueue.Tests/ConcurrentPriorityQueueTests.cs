@@ -16,7 +16,7 @@ public class ConcurrentPriorityQueueTests
         
         queue.Enqueue(key, value);
 
-        var stored = queue.GetStoredData();
+        var stored = queue.DequeueAll();
         Assert.Contains(stored, tuple => tuple == (key, value));
     }
 
@@ -34,7 +34,7 @@ public class ConcurrentPriorityQueueTests
         queue.Enqueue(lesserKey, value);
         queue.Enqueue(greaterKey, value);
 
-        var data = queue.GetStoredData();
+        var data = queue.DequeueAll();
         Assert.Equal(new[]{(lesserKey, value), (greaterKey, value)}, data);
     }
 
@@ -54,7 +54,7 @@ public class ConcurrentPriorityQueueTests
         queue.Enqueue(greaterKey, value);
         queue.Enqueue(lesserKey, value);
 
-        var actual = queue.GetStoredData();
+        var actual = queue.DequeueAll();
         Assert.Equal(new[]{(lesserKey, value), (greaterKey, value)}, actual);
     }
     
@@ -99,7 +99,7 @@ public class ConcurrentPriorityQueueTests
 
         queue.TryDequeue(out _, out _);
 
-        var actual = queue.GetStoredData();
+        var actual = queue.DequeueAll();
         var expected = new[] {( greaterKey, data )};
         Assert.Equal(expected, actual);
     }
@@ -174,7 +174,7 @@ public class ConcurrentPriorityQueueTests
                    .ToArray();
         Task.WaitAll(tasks);
 
-        var actual = queue.GetStoredData().ToHashSet();
+        var actual = queue.DequeueAll().ToHashSet();
         var expected = elements.ToHashSet();
         Assert.Equal(expected, actual);
     }
@@ -259,5 +259,36 @@ public class ConcurrentPriorityQueueTests
         var expected = elements.ToHashSet();
         var actual = dequeued.ToHashSet();
         Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    // Всегда должен оставаться 1 удаленный узел, формирующий префикс,
+    // чтобы избежать гонки
+    // [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(5)]
+    [InlineData(10)]
+    [InlineData(15)]
+    [InlineData(20)]
+    [InlineData(50)]
+    public void TryDequeue__ПриДостиженииПорогаУдаленныхУзлов__ДолженУдалитьУзлыИзСписка(int deleteThreshold)
+    {
+        var elements = Enumerable.Range(0, deleteThreshold)
+                                 .Select(_ => ( Key: Random.Shared.Next(), Priority: Random.Shared.Next() ))
+                                 .ToArray();
+        var queue = new ConcurrentPriorityQueue<int, int>(deleteThreshold: deleteThreshold);
+        foreach (var (key, priority) in elements)
+        {
+            queue.Enqueue(key, priority);
+        }
+
+        for (int i = 0; i < deleteThreshold; i++)
+        {
+            queue.Dequeue();
+        }
+
+        var storedCount = queue.GetStoredNodesCountRaw();
+        Assert.True(storedCount < deleteThreshold);
     }
 }
