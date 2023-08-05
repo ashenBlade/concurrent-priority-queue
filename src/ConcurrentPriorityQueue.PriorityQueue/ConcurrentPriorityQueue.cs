@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Buffers;
+using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("ConcurrentPriorityQueue.PriorityQueue.Tests")]
 
@@ -254,82 +255,93 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     {
         // 1. Находим место, куда нужно вставить элемент
         var (predecessors, successors, lastDeleted) = GetInsertLocation(key);
-        
-        // 2. Аллоцируем память, под узел
-        var height = _random.Next(1, _height);
-        var node = new SkipListNode<TKey, TValue>()
+        try
         {
-            Key = key, 
-            Value = value,
-            Successors = new SkipListNode<TKey, TValue>[height],
-            Inserting = true
-        };
-        
-        // 3. Пытаемся вставить в список на 1 уровне.
-        //    Эта операция аналогична добавлению узла в сам список
-        var taken = false;
-        while (true)
-        {
-            node.Successors[0] = successors[0];
-            var pred = predecessors[0];
-            
-            taken = false;
-            pred.UpdateLock.Enter(ref taken);
-            try
+
+            // 2. Аллоцируем память, под узел
+            var height = _random.Next(1, _height);
+            var node = new SkipListNode<TKey, TValue>()
             {
-                if (pred.Successors[0] == successors[0] 
-                 && !successors[0].Deleted)
+                Key = key, 
+                Value = value,
+                Successors = new SkipListNode<TKey, TValue>[height],
+                Inserting = true
+            };
+        
+            // 3. Пытаемся вставить в список на 1 уровне.
+            //    Эта операция аналогична добавлению узла в сам список
+            var taken = false;
+            while (true)
+            {
+                node.Successors[0] = successors[0];
+                var pred = predecessors[0];
+            
+                taken = false;
+                pred.UpdateLock.Enter(ref taken);
+                try
                 {
-                    pred.Successors[0] = node;
+                    if (pred.Successors[0] == successors[0] 
+                     && !successors[0].Deleted)
+                    {
+                        pred.Successors[0] = node;
+                        break;
+                    }
+                }
+                finally
+                {
+                    if (taken) { pred.UpdateLock.Exit(); }
+                }
+            
+                ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(predecessors);
+                ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(successors);
+
+                // Заново рассчитываем предшественников и последователей
+                ( predecessors, successors, lastDeleted ) = GetInsertLocation(key);
+            }
+
+            // 4. Постепенно наращиваем высоту вставляемого узла
+            var i = 1;
+            while (i < height)
+            {
+                if (node.Deleted || 
+                    successors[i].Deleted || 
+                    successors[i] == lastDeleted)
+                {
+                    // Узел был удален в процессе вставки
                     break;
                 }
-            }
-            finally
-            {
-                if (taken) { pred.UpdateLock.Exit(); }
-            }
-            
-            // Заново рассчитываем предшественников и последователей
-            ( predecessors, successors, lastDeleted ) = GetInsertLocation(key);
-        }
 
-        // 4. Постепенно наращиваем высоту вставляемого узла
-        var i = 1;
-        while (i < height)
+                node.Successors[i] = successors[i];
+            
+                taken = false;
+                predecessors[i].UpdateLock.Enter(ref taken);
+                try
+                {
+                    if (predecessors[i].Successors[i] == successors[i])
+                    {
+                        predecessors[i].Successors[i] = node;
+                    }
+                    else
+                    {
+                        // Что делать с дубликатами ключей подумаю потом
+                        break;
+                    }
+                }
+                finally
+                {
+                    if (taken) { predecessors[i].UpdateLock.Exit(); }
+                }
+
+                i++;
+            }
+
+            node.Inserting = false;
+        }
+        finally
         {
-            if (node.Deleted || 
-                successors[i].Deleted || 
-                successors[i] == lastDeleted)
-            {
-                // Узел был удален в процессе вставки
-                break;
-            }
-
-            node.Successors[i] = successors[i];
-            
-            taken = false;
-            predecessors[i].UpdateLock.Enter(ref taken);
-            try
-            {
-                if (predecessors[i].Successors[i] == successors[i])
-                {
-                    predecessors[i].Successors[i] = node;
-                }
-                else
-                {
-                    // Что делать с дубликатами ключей подумаю потом
-                    break;
-                }
-            }
-            finally
-            {
-                if (taken) { predecessors[i].UpdateLock.Exit(); }
-            }
-
-            i++;
+            ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(successors);
+            ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(predecessors);
         }
-
-        node.Inserting = false;
     }
 
     // Для заданного ключа получить список всех ближайших левых (ключ меньше) узлов
@@ -340,35 +352,45 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         // Последний удаленный узел
         var lastDeleted = ( SkipListNode<TKey, TValue>? ) null;
         // Предшествующие узлы
-        var predecessors = new SkipListNode<TKey, TValue>[_height];
+        var pool = ArrayPool<SkipListNode<TKey, TValue>>.Shared;
+        var predecessors = pool.Rent(_height);
         // Последующие узлы
-        var successors = new SkipListNode<TKey, TValue>[_height];
-        var i = _height - 1;
-        while (0 <= i)
+        var successors = pool.Rent(_height);
+        try
         {
-            var current = pred.Successors[i];
-            while (!IsTail(current) && 
-                   (
-                       IsLessOrEqualThan(current.Key, key)
-                    || current.Deleted
-                    || ( pred.Deleted && i == 0 ) )
-                  )
+            var i = _height - 1;
+            while (0 <= i)
             {
-                if (pred.Deleted && i == 0)
+                var current = pred.Successors[i];
+                while (!IsTail(current) && 
+                       (
+                           IsLessOrEqualThan(current.Key, key)
+                        || current.Deleted
+                        || ( pred.Deleted && i == 0 ) )
+                      )
                 {
-                    lastDeleted = current;
+                    if (pred.Deleted && i == 0)
+                    {
+                        lastDeleted = current;
+                    }
+
+                    pred = current;
+                    current = pred.Successors[i];
                 }
 
-                pred = current;
-                current = pred.Successors[i];
+                predecessors[i] = pred;
+                successors[i] = current;
+                i--;
             }
 
-            predecessors[i] = pred;
-            successors[i] = current;
-            i--;
+            return ( predecessors, successors, lastDeleted );
         }
-
-        return ( predecessors, successors, lastDeleted );
+        catch (Exception)
+        {
+            pool.Return(predecessors);
+            pool.Return(successors);
+            throw;
+        }
     }
 
     private bool IsTail(SkipListNode<TKey, TValue> node) => node == _tail;
