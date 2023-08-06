@@ -542,4 +542,112 @@ public class ConcurrentPriorityQueueTests
         var expected = ( key, value );
         Assert.Equal(expected, actual);
     }
+
+    [Fact]
+    public void Clear__КогдаОчередьПолностьюПуста__ДолженОставитьОчередьПустой()
+    {
+        var queue = CreateQueue();
+
+        queue.Clear();
+        
+        Assert.Empty(queue.DequeueAll());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(10)]
+    [InlineData(20)]
+    [InlineData(50)]
+    public void Clear__КогдаВОчередиНесколькоУзлов__ДолженОчиститьОчередь(int elementsCount)
+    {
+        var elements = Enumerable.Range(0, elementsCount)
+                                 .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
+                                 .ToArray();
+
+        var queue = CreateQueue();
+        
+        foreach (var (key, value) in elements)
+        {
+            queue.Enqueue(key, value);
+        }
+
+        queue.Clear();
+        
+        Assert.Empty(queue.DequeueAll());
+    }
+
+    [Fact]
+    public void Clear__КогдаВыполняютсяПараллельно__ДолжныОставитьОчередьВПравильноСостоянии()
+    {
+        const int operationsCount = 1000;
+        var queue = CreateQueue();
+        var tcs = new TaskCompletionSource();
+        var waitTask = Task.WhenAll(Enumerable.Range(0, operationsCount)
+                                              .Select(_ => Task.Run(async () =>
+                                               {
+                                                   await tcs.Task;
+                                                   queue.Clear();
+                                               }))
+                                              .ToArray());
+        
+        tcs.SetResult();
+        waitTask.Wait();
+        
+        Assert.Empty(queue.DequeueAll());
+    }
+
+    [Theory]
+    [InlineData(100, 100, 100)]
+    [InlineData(250, 100, 100)]
+    [InlineData(500, 500, 500)]
+    [InlineData(500, 1000, 100)]
+    [InlineData(500, 100, 1000)]
+    [InlineData(250, 100, 1000)]
+    [InlineData(1000, 100, 1000)]
+    [InlineData(1000, 1000, 1000)]
+    [InlineData(1000, 500, 1000)]
+    [InlineData(1000, 500, 0)]
+    [InlineData(5000, 2000, 1000)]
+    public async Task Clear__КогдаВыполняютсяEnqueueИDequeueПараллельно__ДолжныРаботатьКорректно(
+        int clearCount,
+        int dequeueCount,
+        int enqueueCount)
+    {
+        var tcs = new TaskCompletionSource();
+        var queue = CreateQueue();
+        var clearTasks = Enumerable.Range(0, clearCount)
+                                   .Select(_ => Task.Run(async () =>
+                                    {
+                                        await tcs.Task;
+                                        queue.Clear();
+                                    }));
+        var enqueueTasks = Enumerable.Range(0, enqueueCount)
+                                     .Select(_ => Task.Run(async () =>
+                                      {
+                                          await tcs.Task;
+                                          queue.Enqueue(Random.Shared.Next(), Random.Shared.Next());
+                                      }));
+        var dequeueTasks = Enumerable.Range(0, dequeueCount)
+                                     .Select(_ => Task.Run(async () =>
+                                      {
+                                          await tcs.Task;
+                                          queue.TryDequeue(out _, out _);
+                                      }));
+        var waitTask = Task.WhenAll(
+            clearTasks
+               .Concat(enqueueTasks)
+               .Concat(dequeueTasks)
+               .ToArray()
+            );
+        
+        tcs.SetResult();
+        await waitTask;
+
+        var data = ( Key: 1, Value: 123 );
+        queue.Enqueue(data.Key, data.Value);
+
+        Assert.Contains(queue.DequeueAll(), tuple => tuple == data);
+    }
 }
