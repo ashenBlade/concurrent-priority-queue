@@ -16,7 +16,7 @@ public class ConcurrentPriorityQueueTests
         
         queue.Enqueue(key, value);
 
-        var stored = queue.DequeueAll();
+        var stored = queue.DequeueAllInternal();
         Assert.Contains(stored, tuple => tuple == (key, value));
     }
 
@@ -34,7 +34,7 @@ public class ConcurrentPriorityQueueTests
         queue.Enqueue(lesserKey, value);
         queue.Enqueue(greaterKey, value);
 
-        var data = queue.DequeueAll();
+        var data = queue.DequeueAllInternal();
         Assert.Equal(new[]{(lesserKey, value), (greaterKey, value)}, data);
     }
 
@@ -54,7 +54,7 @@ public class ConcurrentPriorityQueueTests
         queue.Enqueue(greaterKey, value);
         queue.Enqueue(lesserKey, value);
 
-        var actual = queue.DequeueAll();
+        var actual = queue.DequeueAllInternal();
         Assert.Equal(new[]{(lesserKey, value), (greaterKey, value)}, actual);
     }
     
@@ -99,7 +99,7 @@ public class ConcurrentPriorityQueueTests
 
         queue.TryDequeue(out _, out _);
 
-        var actual = queue.DequeueAll();
+        var actual = queue.DequeueAllInternal();
         var expected = new[] {( greaterKey, data )};
         Assert.Equal(expected, actual);
     }
@@ -174,7 +174,7 @@ public class ConcurrentPriorityQueueTests
                    .ToArray();
         Task.WaitAll(tasks);
 
-        var actual = queue.DequeueAll().ToHashSet();
+        var actual = queue.DequeueAllInternal().ToHashSet();
         var expected = elements.ToHashSet();
         Assert.Equal(expected, actual);
     }
@@ -318,7 +318,7 @@ public class ConcurrentPriorityQueueTests
         cts.SetResult();
         await waitTask;
 
-        var actual = queue.DequeueAll().ToHashSet();
+        var actual = queue.DequeueAllInternal().ToHashSet();
         var expected = elements.ToHashSet();
         
         Assert.Equal(expected, actual);
@@ -368,7 +368,7 @@ public class ConcurrentPriorityQueueTests
         
         await waitTask;
 
-        var actual = queue.DequeueAll().ToHashSet();
+        var actual = queue.DequeueAllInternal().ToHashSet();
         var expected = elements.ToHashSet();
         Assert.Equal(expected, actual);
     }
@@ -403,7 +403,7 @@ public class ConcurrentPriorityQueueTests
         
         await waitTask;
 
-        var actual = queue.DequeueAll().ToHashSet();
+        var actual = queue.DequeueAllInternal().ToHashSet();
         var expected = elements.ToHashSet();
         Assert.Equal(expected, actual);
     }
@@ -550,7 +550,7 @@ public class ConcurrentPriorityQueueTests
 
         queue.Clear();
         
-        Assert.Empty(queue.DequeueAll());
+        Assert.Empty(queue.DequeueAllInternal());
     }
 
     [Theory]
@@ -575,7 +575,7 @@ public class ConcurrentPriorityQueueTests
 
         queue.Clear();
         
-        Assert.Empty(queue.DequeueAll());
+        Assert.Empty(queue.DequeueAllInternal());
     }
 
     [Fact]
@@ -595,7 +595,7 @@ public class ConcurrentPriorityQueueTests
         tcs.SetResult();
         waitTask.Wait();
         
-        Assert.Empty(queue.DequeueAll());
+        Assert.Empty(queue.DequeueAllInternal());
     }
 
     [Theory]
@@ -648,7 +648,7 @@ public class ConcurrentPriorityQueueTests
         var data = ( Key: 1, Value: 123 );
         queue.Enqueue(data.Key, data.Value);
 
-        Assert.Contains(queue.DequeueAll(), tuple => tuple == data);
+        Assert.Contains(queue.DequeueAllInternal(), tuple => tuple == data);
     }
 
     [Fact]
@@ -717,5 +717,25 @@ public class ConcurrentPriorityQueueTests
         var actual = queue.GetUnorderedEntries().Concat(dequeued).ToHashSet();
         var expected = elements.ToHashSet();
         Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(5)]
+    [InlineData(10)]
+    [InlineData(20)]
+    [InlineData(50)]
+    [InlineData(100)]
+    public void EnqueueDequeue__КогдаВыполняютсяПоОчереди__ВРезультатеОчередьДолжнаБытьПуста(int iterationsCount)
+    {
+        var queue = CreateQueue();
+        for (int i = 0; i < iterationsCount; i++)
+        {
+            queue.Enqueue(Random.Shared.Next(), Random.Shared.Next());
+            queue.Dequeue();
+        }
+        
+        Assert.Empty(queue.DequeueAllInternal());
     }
 }

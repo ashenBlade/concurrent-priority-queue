@@ -541,7 +541,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     }
 
     // Для тестов
-    internal IReadOnlyList<(TKey Key, TValue Value)> DequeueAll()
+    internal IReadOnlyList<(TKey Key, TValue Value)> DequeueAllInternal()
     {
         var result = new List<(TKey, TValue)>();
 
