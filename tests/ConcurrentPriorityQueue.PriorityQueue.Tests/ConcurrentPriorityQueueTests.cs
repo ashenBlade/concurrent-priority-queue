@@ -650,4 +650,72 @@ public class ConcurrentPriorityQueueTests
 
         Assert.Contains(queue.DequeueAll(), tuple => tuple == data);
     }
+
+    [Fact]
+    public void GetUnorderedEntries__КогдаОчередьПуста__ДолженВернутьПустойСписок()
+    {
+        var queue = CreateQueue();
+        Assert.Empty(queue.GetUnorderedEntries());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(5)]
+    [InlineData(10)]
+    [InlineData(20)]
+    [InlineData(50)]
+    [InlineData(100)]
+    public void GetUnorderedEntries__КогдаВОчередиТолькоДобавленныеЭлементы__ДолженВернутьХранившиесяЭлементы(int elementsCount)
+    {
+        var elements = Enumerable.Range(0, elementsCount)
+                                 .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
+                                 .ToArray();
+        var queue = CreateQueue();
+        foreach (var (key, value) in elements)
+        {
+            queue.Enqueue(key, value);
+        }
+
+        var actual = queue.GetUnorderedEntries().ToHashSet();
+        var expected = elements.ToHashSet();
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 3)]
+    [InlineData(10, 10)]
+    [InlineData(1, 10)]
+    [InlineData(10, 1)]
+    [InlineData(20, 1)]
+    [InlineData(20, 0)]
+    [InlineData(1, 2)]
+    public void GetUnorderedEntries__КогдаВОчередиЕстьУдаленныеИДобавленныеЭлементы__ДолженВернутьЖивыеЭлементы(
+        int deletedCount,
+        int enqueuedCount)
+    {
+        var elements = Enumerable.Range(0, enqueuedCount)
+                                 .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
+                                 .ToArray();
+        var dequeued = new List<(int, int)>();
+        var queue = CreateQueue();
+        foreach (var (key, value) in elements)
+        {
+            queue.Enqueue(key, value);
+        }
+
+        for (var i = 0; i < deletedCount; i++)
+        {
+            if (queue.TryDequeue(out var key, out var value))
+            {
+                dequeued.Add((key, value));
+            }
+        }
+
+        var actual = queue.GetUnorderedEntries().Concat(dequeued).ToHashSet();
+        var expected = elements.ToHashSet();
+        Assert.Equal(expected, actual);
+    }
 }

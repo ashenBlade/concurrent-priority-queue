@@ -443,7 +443,43 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             node = node.Successors[0];
         }
     }
-    
+
+    public IEnumerable<(TKey Key, TValue Value)> GetUnorderedEntries()
+    {
+        var node = _head.Successors[0];
+        while (!IsTail(node))
+        {
+            if (!node.Deleted)
+            {
+                TKey key = default!;
+                TValue value = default!;
+                var success = false;
+                var taken = false;
+                node.UpdateLock.Enter(ref taken);
+                try
+                {
+                    if (!node.Deleted)
+                    {
+                        key = node.Key;
+                        value = node.Value;
+                        success = true;
+                    }
+                }
+                finally
+                {
+                    if (taken) { node.UpdateLock.Exit(); }
+                }
+
+                if (success)
+                {
+                    yield return ( key, value );
+                }
+            }
+
+            node = node.Successors[0];
+        }
+    }
+
     // Для заданного ключа получить список всех ближайших левых (ключ меньше) узлов
     private (SkipListNode<TKey, TValue>[] Predecessors, SkipListNode<TKey, TValue>[] Successors, SkipListNode<TKey, TValue>? LastDeleted) GetInsertLocation(TKey key)
     {
