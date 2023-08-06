@@ -424,18 +424,23 @@ public class ConcurrentPriorityQueue<TKey, TValue>
 
     public void Clear()
     {
+        SkipListNode<TKey, TValue> node;
         var taken = false;
         _head.UpdateLock.Enter(ref taken);
         try
         {
+            node = _head.Successors[0];
             Array.Fill(_head.Successors, _tail);
         }
         finally
         {
-            if (taken)
-            {
-                _head.UpdateLock.Exit();
-            }
+            if (taken) { _head.UpdateLock.Exit(); }
+        }
+
+        while (!IsTail(node))
+        {
+            node.Deleted = true;
+            node = node.Successors[0];
         }
     }
     
@@ -477,6 +482,8 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 i--;
             }
 
+            var queue = new PriorityQueue<int, int>();
+            
             return ( predecessors, successors, lastDeleted );
         }
         catch (Exception)
