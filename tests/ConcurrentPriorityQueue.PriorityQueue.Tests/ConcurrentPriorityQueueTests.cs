@@ -407,4 +407,96 @@ public class ConcurrentPriorityQueueTests
         var expected = elements.ToHashSet();
         Assert.Equal(expected, actual);
     }
+
+    private record ReferenceTypeKey(int Key): IComparable<ReferenceTypeKey>
+    {
+        public int CompareTo(ReferenceTypeKey? other) =>
+            other is null
+                ? 1
+                : Key.CompareTo(other.Key);
+    }
+
+    [Fact]
+    public void TryDequeue__КогдаКлючСылочныйТип__ПослеУдаленияСписокДолженРаботатьНормально()
+    {
+        var comparer = Comparer<ReferenceTypeKey>.Create((key, typeKey) => key?.CompareTo(typeKey) ?? 1);
+        var queue = new ConcurrentPriorityQueue<ReferenceTypeKey, int>(comparer: comparer);
+
+        var first = (Key: new ReferenceTypeKey(1), Value: 123 );
+        var second = (Key: new ReferenceTypeKey(2), Value: 97 );
+        
+        queue.Enqueue(first.Key, first.Value);
+        queue.Enqueue(second.Key, second.Value);
+
+        queue.Dequeue();
+
+        if (!queue.TryDequeue(out var actualKey, out var actualValue))
+        {
+            Assert.True(false, "В очереди должен находиться 1 элемент, т.к. добавили 2 и забрали 1");
+        }
+
+        var actual = ( actualKey, actualValue );
+        var expected = second;
+        
+        Assert.Equal(expected, actual);
+    }
+    
+    [Fact]
+    public void TryDequeue__КогдаКлючСылочныйТип__ПослеУдаленияДолженДобавлятьНовыеЭлементы()
+    {
+        var comparer = Comparer<ReferenceTypeKey>.Create((key, typeKey) => key?.CompareTo(typeKey) ?? 1);
+        var queue = new ConcurrentPriorityQueue<ReferenceTypeKey, int>(comparer: comparer);
+
+        var first = (Key: new ReferenceTypeKey(1), Value: 123 );
+        var second = (Key: new ReferenceTypeKey(2), Value: 97 );
+        
+        queue.Enqueue(first.Key, first.Value);
+        queue.Dequeue();
+        queue.Enqueue(second.Key, second.Value);
+
+        if (!queue.TryDequeue(out var actualKey, out var actualValue))
+        {
+            Assert.True(false, "В очереди должен находиться 1 элемент, т.к. добавили 2 и забрали 1");
+        }
+
+        var actual = ( actualKey, actualValue );
+        var expected = second;
+        
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void TryDequeue__КогдаКлючСылочныйТипИДостигПорогУдаленныхЭлементов__ДолженДобавлятьНовыеЭлементыНормально()
+    {
+        const int deleteThreshold = 10;
+        var comparer = Comparer<ReferenceTypeKey>.Create((key, typeKey) => key?.CompareTo(typeKey) ?? 1);
+        var queue = new ConcurrentPriorityQueue<ReferenceTypeKey, int>(deleteThreshold: deleteThreshold, comparer: comparer);
+
+        var deletedElements = Enumerable.Range(0, deleteThreshold)
+                                        .Select(key => ( Key: new ReferenceTypeKey(key), Value: Random.Shared.Next() ))
+                                        .ToArray();
+        
+        var enqueuedElement = ( Key: new ReferenceTypeKey( deleteThreshold ), Value: Random.Shared.Next() );
+        
+        foreach (var (key, value) in deletedElements)
+        {
+            queue.Enqueue(key, value);
+        }
+        
+        for (var i = 0; i < deletedElements.Length; i++)
+        {
+            queue.Dequeue();
+        }
+        
+        queue.Enqueue(enqueuedElement.Key, enqueuedElement.Value);
+        if (!queue.TryDequeue(out var actualKey, out var actualValue))
+        {
+            Assert.True(false, "В очереди должен находиться 1 элемент");
+        }
+
+        var actual = ( actualKey, actualValue );
+        var expected = enqueuedElement;
+        
+        Assert.Equal(expected, actual);
+    }
 }

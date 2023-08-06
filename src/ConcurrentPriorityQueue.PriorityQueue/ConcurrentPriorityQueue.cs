@@ -6,6 +6,10 @@ using System.Runtime.CompilerServices;
 namespace ConcurrentPriorityQueue.PriorityQueue;
 
 // - Добавить очистку ссылок после логического удаления
+// - Peek, TryPeek
+// - TryEnqueue ???
+// - Clear
+// - Получить все элементы
 public class ConcurrentPriorityQueue<TKey, TValue>
 {
     /// <summary>
@@ -31,9 +35,9 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     /// При каждом вызове делается новое вычисление,
     /// вместо постоянного обновления значения через <see cref="Interlocked"/>
     /// </remarks>
-    public int Count => GetAliveNodesCount();
+    public int Count => CalculateAliveNodesCount();
 
-    private int GetAliveNodesCount()
+    private int CalculateAliveNodesCount()
     {
         var node = _head.Successors[0];
         var count = 0;
@@ -167,7 +171,15 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         if (deletedCount < _deleteThreshold)
         {
             key = currentHead.Key;
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
+            {
+                currentHead.Key = default!;
+            }
             value = currentHead.Value;
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+            {
+                currentHead.Value = default!;
+            }
             return true;
         }
 
