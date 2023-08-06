@@ -164,7 +164,7 @@ public class ConcurrentPriorityQueueTests
     {
         var queue = CreateQueue();
         var elements = Enumerable.Range(0, elementsCount)
-                                 .Select(i => ( Priority: Random.Shared.Next(), Data: Random.Shared.Next() ))
+                                 .Select(_ => ( Priority: Random.Shared.Next(), Data: Random.Shared.Next() ))
                                  .ToArray();
         var tasks = elements
                    .Select(pair => Task.Run(() =>
@@ -419,7 +419,7 @@ public class ConcurrentPriorityQueueTests
     [Fact]
     public void TryDequeue__КогдаКлючСылочныйТип__ПослеУдаленияСписокДолженРаботатьНормально()
     {
-        var comparer = Comparer<ReferenceTypeKey>.Create((key, typeKey) => key?.CompareTo(typeKey) ?? 1);
+        var comparer = Comparer<ReferenceTypeKey>.Create((key, typeKey) => key.CompareTo(typeKey));
         var queue = new ConcurrentPriorityQueue<ReferenceTypeKey, int>(comparer: comparer);
 
         var first = (Key: new ReferenceTypeKey(1), Value: 123 );
@@ -497,6 +497,49 @@ public class ConcurrentPriorityQueueTests
         var actual = ( actualKey, actualValue );
         var expected = enqueuedElement;
         
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void TryPeek__КогдаОчередьПуста__ДолженВернутьFalse()
+    {
+        var queue = CreateQueue();
+        Assert.False(queue.TryPeek(out _, out _));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(5)]
+    [InlineData(10)]
+    [InlineData(50)]
+    [InlineData(100)]
+    public void TryPeek__КогдаВОчередиНесколькоЭлементов__ДолженВернутьTrue(int elementsCount)
+    {
+        var queue = CreateQueue();
+        
+        foreach (var (key, value) in Enumerable.Range(0, elementsCount).Select(_ => (Key: Random.Shared.Next(), Value: Random.Shared.Next())))
+        {
+            queue.Enqueue(key, value);
+        }
+        
+        Assert.True(queue.TryPeek(out _, out _));
+    }
+
+    [Fact]
+    public void TryPeek__КогдаВОчередиЕстьЭлементы__НеДолженУдалятьЭлементы()
+    {
+        var key = 123;
+        var value = 98765;
+        var queue = CreateQueue();
+        queue.Enqueue(key, value);
+
+        queue.TryPeek(out _, out _);
+
+        var actualValue = queue.Dequeue(out var actualKey);
+
+        var actual = ( actualKey, actualValue );
+        var expected = ( key, value );
         Assert.Equal(expected, actual);
     }
 }

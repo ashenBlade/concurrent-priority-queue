@@ -5,7 +5,6 @@ using System.Runtime.CompilerServices;
 
 namespace ConcurrentPriorityQueue.PriorityQueue;
 
-// - Добавить очистку ссылок после логического удаления
 // - Peek, TryPeek
 // - TryEnqueue ???
 // - Clear
@@ -75,6 +74,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     /// Максимальное количество хранимых логически удаленных узлов
     /// </summary>
     private readonly int _deleteThreshold;
+    
     
     
     public ConcurrentPriorityQueue(int height = DefaultHeight, int deleteThreshold = DefaultDeleteThreshold, IComparer<TKey>? comparer = null)
@@ -368,6 +368,57 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(predecessors);
         }
     }
+
+    public bool TryPeek(out TKey key, out TValue value)
+    {
+        var successor = _head.Successors[0];
+        while (true)
+        {
+            if (IsTail(successor))
+            {
+                key = default!;
+                value = default!;
+                return false;
+            }
+
+            if (successor.Deleted)
+            {
+                successor = successor.Successors[0];
+                continue;
+            }
+
+            var taken = false;
+            successor.UpdateLock.Enter(ref taken);
+            try
+            {
+                if (!successor.Deleted)
+                {
+                    key = successor.Key;
+                    value = successor.Value;
+                    return true;
+                }
+            }
+            finally
+            {
+                if (taken) { successor.UpdateLock.Exit(); }
+            }
+
+            successor = successor.Successors[0];
+        }
+    }
+
+    public TValue Peek(out TKey key)
+    {
+        if (TryPeek(out key, out var value))
+        {
+            return value;
+        }
+
+        throw new InvalidOperationException("Очередь пуста");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public TValue Peek() => Peek(out _);
 
     // Для заданного ключа получить список всех ближайших левых (ключ меньше) узлов
     private (SkipListNode<TKey, TValue>[] Predecessors, SkipListNode<TKey, TValue>[] Successors, SkipListNode<TKey, TValue>? LastDeleted) GetInsertLocation(TKey key)
