@@ -11,6 +11,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{2E62281B
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConcurrentPriorityQueue.PriorityQueue.Tests", "tests\ConcurrentPriorityQueue.PriorityQueue.Tests\ConcurrentPriorityQueue.PriorityQueue.Tests.csproj", "{688B0578-E497-4E8A-9B68-0535A720DB36}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "benchmarks", "benchmarks", "{7CEB74BA-1B5E-4900-BAD5-F64DD5C7C7DC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConcurrentPriorityQueue.Benchmarks", "benchmarks\ConcurrentPriorityQueue.Benchmarks\ConcurrentPriorityQueue.Benchmarks.csproj", "{4937FBB9-DF34-4864-BFA9-2DE413D7A57A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -22,6 +26,7 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{8BC28099-76C4-4AE3-8785-F1DCBA8FA6DB} = {D7ACCC44-22E4-4BAB-A1F8-25245E66807C}
 		{688B0578-E497-4E8A-9B68-0535A720DB36} = {2E62281B-947E-4ABE-BD65-B81B5147E896}
+		{4937FBB9-DF34-4864-BFA9-2DE413D7A57A} = {7CEB74BA-1B5E-4900-BAD5-F64DD5C7C7DC}
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{8BC28099-76C4-4AE3-8785-F1DCBA8FA6DB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -32,5 +37,9 @@ Global
 		{688B0578-E497-4E8A-9B68-0535A720DB36}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{688B0578-E497-4E8A-9B68-0535A720DB36}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{688B0578-E497-4E8A-9B68-0535A720DB36}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4937FBB9-DF34-4864-BFA9-2DE413D7A57A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4937FBB9-DF34-4864-BFA9-2DE413D7A57A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4937FBB9-DF34-4864-BFA9-2DE413D7A57A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4937FBB9-DF34-4864-BFA9-2DE413D7A57A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
