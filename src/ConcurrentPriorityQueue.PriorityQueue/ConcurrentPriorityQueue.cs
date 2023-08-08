@@ -238,20 +238,10 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             }
 
             var taken = false;
-            _head.UpdateLock.Enter(ref taken);
-            try
+            var old = Interlocked.CompareExchange(ref _head.Successors[i], pred.Successors[i], savedHead);
+            if (old == savedHead)
             {
-                if (_head.Successors[i] == savedHead)
-                {
-                    // В голову списка нужно класть только удаленные узлы, так как в противном случае
-                    // перед живым узлом могут вставить узел с меньшим ключом, но мы его потеряем
-                    _head.Successors[i] = pred.Successors[i];
-                    i--;
-                }
-            }
-            finally
-            {
-                if (taken) { _head.UpdateLock.Exit(); }
+                i--;
             }
         }
     }
@@ -285,13 +275,12 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         {
             // 3. Пытаемся вставить в список на 1 уровне.
             //    Эта операция аналогична добавлению узла в сам список
-            bool taken;
             while (true)
             {
                 node.Successors[0] = successors[0];
                 var pred = predecessors[0];
 
-                taken = false;
+                var taken = false;
                 pred.UpdateLock.Enter(ref taken);
                 try
                 {
@@ -327,28 +316,12 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 }
 
                 node.Successors[i] = successors[i];
-                
-                taken = false;
-                var broken = false;
-                predecessors[i].UpdateLock.Enter(ref taken);
-                try
-                {
-                    if (predecessors[i].Successors[i] == successors[i])
-                    {
-                        predecessors[i].Successors[i] = node;
-                    }
-                    else
-                    {
-                        broken = true;
-                    }
-                }
-                finally
-                {
-                    if (taken) { predecessors[i].UpdateLock.Exit(); }
-                }
 
-                if (broken)
+                var old = Interlocked.CompareExchange(ref predecessors[i].Successors[i], node, successors[i]);
+
+                if (old != successors[i])
                 {
+                    // Кто-то другой изменил список, заходим на другой круг
                     ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(successors);
                     ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(predecessors);
                     ( successors, predecessors, lastDeleted ) = GetInsertLocation(key);
