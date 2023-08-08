@@ -4,6 +4,11 @@ namespace ConcurrentPriorityQueue.PriorityQueue.Tests;
 
 public class ConcurrentPriorityQueueTests
 {
+    /// <summary>
+    /// Количество повторений для тестов с параллельными операциями.
+    /// Тестировать конкурентные операции сложна...
+    /// </summary>
+    private const int ParallelTestsRepeatCount = 10;
     private static ConcurrentPriorityQueue<int, int> CreateQueue() => new();
 
     [Fact]
@@ -190,29 +195,32 @@ public class ConcurrentPriorityQueueTests
     public async Task TryDequeue__КогдаВыполняютсяПараллельноСтолькоСколькоЭлементовВОчереди__ДолжныВернутьТеЖеЭлементы(
         int elementsCount)
     {
-        var elements = Enumerable.Range(0, elementsCount)
-                                 .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
-                                 .ToArray();
-
-        var queue = CreateQueue();
-        Array.ForEach(elements, tuple => queue.Enqueue(tuple.Key, tuple.Value));
-
-        var stored = new ConcurrentQueue<(int Key, int Value)>();
-        var tasks = new Task[elementsCount];
-        for (var i = 0; i < tasks.Length; i++)
+        for (int j = 0; j < ParallelTestsRepeatCount; j++)
         {
-            tasks[i] = Task.Run(() =>
+            var elements = Enumerable.Range(0, elementsCount)
+                                     .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
+                                     .ToArray();
+
+            var queue = CreateQueue();
+            Array.ForEach(elements, tuple => queue.Enqueue(tuple.Key, tuple.Value));
+
+            var stored = new ConcurrentQueue<(int Key, int Value)>();
+            var tasks = new Task[elementsCount];
+            for (var i = 0; i < tasks.Length; i++)
             {
-                var value = queue.Dequeue(out var key);
-                stored.Enqueue(( key, value ));
-            });
+                tasks[i] = Task.Run(() =>
+                {
+                    var value = queue.Dequeue(out var key);
+                    stored.Enqueue(( key, value ));
+                });
+            }
+
+            await Task.WhenAll(tasks);
+
+            var actual = stored.ToHashSet();
+            var expected = elements.ToHashSet();
+            Assert.Equal(expected, actual);
         }
-
-        await Task.WhenAll(tasks);
-
-        var actual = stored.ToHashSet();
-        var expected = elements.ToHashSet();
-        Assert.Equal(expected, actual);
     }
     
     [Theory]
@@ -222,43 +230,48 @@ public class ConcurrentPriorityQueueTests
     [InlineData(200)]
     [InlineData(250)]
     [InlineData(500)]
-    public async Task EnqueueTryDequeue__КогдаВыполняютсяОдновременно__ДолжныПравильноОбработатьВсеОперации(int elementsCount)
+    [InlineData(750)]
+    [InlineData(1000)]
+    public async Task EnqueueDequeue__КогдаВыполняютсяОдновременно__ДолжныПравильноОбработатьВсеОперации(int elementsCount)
     {
-        var elements = Enumerable.Range(0, elementsCount)
-                                 .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
-                                 .ToArray();
-        var tcs = new TaskCompletionSource();
-        var queue = CreateQueue();
-        var dequeued = new ConcurrentQueue<(int Key, int Value)>();
-        var enqueueTasks = elements.Select(p => Task.Run(async () =>
+        for (int i = 0; i < ParallelTestsRepeatCount; i++)
         {
-            await tcs.Task;
-            queue.Enqueue(p.Key, p.Value);
-        }));
-        var dequeueTasks = Enumerable.Range(0, elementsCount)
-                                     .Select(_ => Task.Run(async () =>
-                                      {
-                                          await tcs.Task;
-                                          if (queue.TryDequeue(out var key, out var value))
+            var elements = Enumerable.Range(0, elementsCount)
+                                     .Select(_ => ( Key: Random.Shared.Next(), Value: Random.Shared.Next() ))
+                                     .ToArray();
+            var tcs = new TaskCompletionSource();
+            var queue = CreateQueue();
+            var dequeued = new ConcurrentQueue<(int Key, int Value)>();
+            var enqueueTasks = elements.Select(p => Task.Run(async () =>
+            {
+                await tcs.Task;
+                queue.Enqueue(p.Key, p.Value);
+            }));
+            var dequeueTasks = Enumerable.Range(0, elementsCount)
+                                         .Select(_ => Task.Run(async () =>
                                           {
-                                              dequeued.Enqueue((key, value));
-                                          }
-                                      }));
-        var tasks = enqueueTasks
-                   .Concat(dequeueTasks)
-                   .ToArray();
-        var waitTask = Task.WhenAll(tasks);
-        tcs.SetResult();
-        await waitTask;
+                                              await tcs.Task;
+                                              if (queue.TryDequeue(out var key, out var value))
+                                              {
+                                                  dequeued.Enqueue((key, value));
+                                              }
+                                          }));
+            var tasks = enqueueTasks
+                       .Concat(dequeueTasks)
+                       .ToArray();
+            var waitTask = Task.WhenAll(tasks);
+            tcs.SetResult();
+            await waitTask;
 
-        while (queue.TryDequeue(out var key, out var value))
-        {
-            dequeued.Enqueue((key, value));
+            while (queue.TryDequeue(out var key, out var value))
+            {
+                dequeued.Enqueue((key, value));
+            }
+
+            var expected = elements.ToHashSet();
+            var actual = dequeued.ToHashSet();
+            Assert.Equal(expected, actual);
         }
-
-        var expected = elements.ToHashSet();
-        var actual = dequeued.ToHashSet();
-        Assert.Equal(expected, actual);
     }
 
     [Theory]
@@ -299,29 +312,35 @@ public class ConcurrentPriorityQueueTests
     [InlineData(25)]
     [InlineData(50)]
     [InlineData(100)]
+    [InlineData(200)]
+    [InlineData(300)]
+    [InlineData(500)]
     public async Task Enqueue__КогдаПараллельноДобавляютсяЭлементыСОдинаковымиКлючами__ДолженДобавитьВсеКорректно(
         int elementsCount)
     {
-        var key = 1;
-        var elements = Enumerable.Range(0, elementsCount)
-                                 .Select(_ => ( Key: key, Value: Random.Shared.Next() ))
-                                 .ToArray();
-        var cts = new TaskCompletionSource();
-        var queue = CreateQueue();
-        var enqueueTasks = elements.Select(tuple => Task.Run(async () =>
-                                    {
-                                        await cts.Task;
-                                        queue.Enqueue(tuple.Key, tuple.Value);
-                                    }))
-                                   .ToArray();
-        var waitTask = Task.WhenAll(enqueueTasks);
-        cts.SetResult();
-        await waitTask;
+        for (int i = 0; i < ParallelTestsRepeatCount; i++)
+        {
+            var key = 1;
+            var elements = Enumerable.Range(0, elementsCount)
+                                     .Select(_ => ( Key: key, Value: Random.Shared.Next() ))
+                                     .ToArray();
+            var cts = new TaskCompletionSource();
+            var queue = CreateQueue();
+            var enqueueTasks = elements.Select(tuple => Task.Run(async () =>
+                                        {
+                                            await cts.Task;
+                                            queue.Enqueue(tuple.Key, tuple.Value);
+                                        }))
+                                       .ToArray();
+            var waitTask = Task.WhenAll(enqueueTasks);
+            cts.SetResult();
+            await waitTask;
 
-        var actual = queue.DequeueAllInternal().ToHashSet();
-        var expected = elements.ToHashSet();
+            var actual = queue.DequeueAllInternal().ToHashSet();
+            var expected = elements.ToHashSet();
         
-        Assert.Equal(expected, actual);
+            Assert.Equal(expected, actual);
+        }
     }
 
     private static void Shuffle<T>(T[] array)
@@ -348,29 +367,32 @@ public class ConcurrentPriorityQueueTests
         int identicalKeysCount,
         int distinctKeysCount)
     {
-        const int identicalKey = 1;
-        var identicalKeys = Enumerable.Range(0, identicalKeysCount)
-                                      .Select(_ => ( Key: identicalKey, Value: Random.Shared.Next() ));
-        var distinctKeys = Enumerable.Range(1, distinctKeysCount)
-                                     .Select(key => ( Key: key, Value: Random.Shared.Next() ));
-        var elements = identicalKeys.Concat(distinctKeys).ToArray();
-        Shuffle(elements);
-
-        var queue = CreateQueue();
-        var tcs = new TaskCompletionSource();
-        var waitTask = Task.WhenAll( elements.Select(e => Task.Run(async () =>
+        for (int i = 0; i < ParallelTestsRepeatCount; i++)
         {
-            await tcs.Task;
-            queue.Enqueue(e.Key, e.Value);
-        })).ToArray());
-        
-        tcs.SetResult();
-        
-        await waitTask;
+            const int identicalKey = 1;
+            var identicalKeys = Enumerable.Range(0, identicalKeysCount)
+                                          .Select(_ => ( Key: identicalKey, Value: Random.Shared.Next() ));
+            var distinctKeys = Enumerable.Range(1, distinctKeysCount)
+                                         .Select(key => ( Key: key, Value: Random.Shared.Next() ));
+            var elements = identicalKeys.Concat(distinctKeys).ToArray();
+            Shuffle(elements);
 
-        var actual = queue.DequeueAllInternal().ToHashSet();
-        var expected = elements.ToHashSet();
-        Assert.Equal(expected, actual);
+            var queue = CreateQueue();
+            var tcs = new TaskCompletionSource();
+            var waitTask = Task.WhenAll( elements.Select(e => Task.Run(async () =>
+            {
+                await tcs.Task;
+                queue.Enqueue(e.Key, e.Value);
+            })).ToArray());
+        
+            tcs.SetResult();
+        
+            await waitTask;
+
+            var actual = queue.DequeueAllInternal().ToHashSet();
+            var expected = elements.ToHashSet();
+            Assert.Equal(expected, actual);
+        }
     }
     
     [Theory]
@@ -383,29 +405,32 @@ public class ConcurrentPriorityQueueTests
         int identicalKeysCount,
         int distinctKeysCount)
     {
-        const int identicalKey = 1;
-        var identicalKeys = Enumerable.Range(0, identicalKeysCount)
-                                      .Select(_ => ( Key: identicalKey, Value: Random.Shared.Next() ));
-        var distinctKeys = Enumerable.Range(1 - distinctKeysCount, distinctKeysCount)
-                                     .Select(key => ( Key: key, Value: Random.Shared.Next() ));
-        var elements = identicalKeys.Concat(distinctKeys).ToArray();
-        Shuffle(elements);
-
-        var queue = CreateQueue();
-        var tcs = new TaskCompletionSource();
-        var waitTask = Task.WhenAll( elements.Select(e => Task.Run(async () =>
+        for (int i = 0; i < ParallelTestsRepeatCount; i++)
         {
-            await tcs.Task;
-            queue.Enqueue(e.Key, e.Value);
-        })).ToArray());
-        
-        tcs.SetResult();
-        
-        await waitTask;
+            const int identicalKey = 1;
+            var identicalKeys = Enumerable.Range(0, identicalKeysCount)
+                                          .Select(_ => ( Key: identicalKey, Value: Random.Shared.Next() ));
+            var distinctKeys = Enumerable.Range(1 - distinctKeysCount, distinctKeysCount)
+                                         .Select(key => ( Key: key, Value: Random.Shared.Next() ));
+            var elements = identicalKeys.Concat(distinctKeys).ToArray();
+            Shuffle(elements);
 
-        var actual = queue.DequeueAllInternal().ToHashSet();
-        var expected = elements.ToHashSet();
-        Assert.Equal(expected, actual);
+            var queue = CreateQueue();
+            var tcs = new TaskCompletionSource();
+            var waitTask = Task.WhenAll( elements.Select(e => Task.Run(async () =>
+            {
+                await tcs.Task;
+                queue.Enqueue(e.Key, e.Value);
+            })).ToArray());
+        
+            tcs.SetResult();
+        
+            await waitTask;
+
+            var actual = queue.DequeueAllInternal().ToHashSet();
+            var expected = elements.ToHashSet();
+            Assert.Equal(expected, actual);
+        }
     }
 
     private record ReferenceTypeKey(int Key): IComparable<ReferenceTypeKey>
@@ -581,21 +606,24 @@ public class ConcurrentPriorityQueueTests
     [Fact]
     public void Clear__КогдаВыполняютсяПараллельно__ДолжныОставитьОчередьВПравильноСостоянии()
     {
-        const int operationsCount = 1000;
-        var queue = CreateQueue();
-        var tcs = new TaskCompletionSource();
-        var waitTask = Task.WhenAll(Enumerable.Range(0, operationsCount)
-                                              .Select(_ => Task.Run(async () =>
-                                               {
-                                                   await tcs.Task;
-                                                   queue.Clear();
-                                               }))
-                                              .ToArray());
+        for (int i = 0; i < ParallelTestsRepeatCount; i++)
+        {
+            const int operationsCount = 1000;
+            var queue = CreateQueue();
+            var tcs = new TaskCompletionSource();
+            var waitTask = Task.WhenAll(Enumerable.Range(0, operationsCount)
+                                                  .Select(_ => Task.Run(async () =>
+                                                   {
+                                                       await tcs.Task;
+                                                       queue.Clear();
+                                                   }))
+                                                  .ToArray());
         
-        tcs.SetResult();
-        waitTask.Wait();
+            tcs.SetResult();
+            waitTask.Wait();
         
-        Assert.Empty(queue.DequeueAllInternal());
+            Assert.Empty(queue.DequeueAllInternal());
+        }
     }
 
     [Theory]
@@ -615,40 +643,44 @@ public class ConcurrentPriorityQueueTests
         int dequeueCount,
         int enqueueCount)
     {
-        var tcs = new TaskCompletionSource();
-        var queue = CreateQueue();
-        var clearTasks = Enumerable.Range(0, clearCount)
-                                   .Select(_ => Task.Run(async () =>
-                                    {
-                                        await tcs.Task;
-                                        queue.Clear();
-                                    }));
-        var enqueueTasks = Enumerable.Range(0, enqueueCount)
-                                     .Select(_ => Task.Run(async () =>
-                                      {
-                                          await tcs.Task;
-                                          queue.Enqueue(Random.Shared.Next(), Random.Shared.Next());
-                                      }));
-        var dequeueTasks = Enumerable.Range(0, dequeueCount)
-                                     .Select(_ => Task.Run(async () =>
-                                      {
-                                          await tcs.Task;
-                                          queue.TryDequeue(out _, out _);
-                                      }));
-        var waitTask = Task.WhenAll(
-            clearTasks
-               .Concat(enqueueTasks)
-               .Concat(dequeueTasks)
-               .ToArray()
-            );
+        for (int i = 0; i < ParallelTestsRepeatCount; i++)
+        {
+
+            var tcs = new TaskCompletionSource();
+            var queue = CreateQueue();
+            var clearTasks = Enumerable.Range(0, clearCount)
+                                       .Select(_ => Task.Run(async () =>
+                                        {
+                                            await tcs.Task;
+                                            queue.Clear();
+                                        }));
+            var enqueueTasks = Enumerable.Range(0, enqueueCount)
+                                         .Select(_ => Task.Run(async () =>
+                                          {
+                                              await tcs.Task;
+                                              queue.Enqueue(Random.Shared.Next(), Random.Shared.Next());
+                                          }));
+            var dequeueTasks = Enumerable.Range(0, dequeueCount)
+                                         .Select(_ => Task.Run(async () =>
+                                          {
+                                              await tcs.Task;
+                                              queue.TryDequeue(out _, out _);
+                                          }));
+            var waitTask = Task.WhenAll(
+                clearTasks
+                   .Concat(enqueueTasks)
+                   .Concat(dequeueTasks)
+                   .ToArray()
+                );
         
-        tcs.SetResult();
-        await waitTask;
+            tcs.SetResult();
+            await waitTask;
 
-        var data = ( Key: 1, Value: 123 );
-        queue.Enqueue(data.Key, data.Value);
+            var data = ( Key: 1, Value: 123 );
+            queue.Enqueue(data.Key, data.Value);
 
-        Assert.Contains(queue.DequeueAllInternal(), tuple => tuple == data);
+            Assert.Contains(queue.DequeueAllInternal(), tuple => tuple == data);
+        }
     }
 
     [Fact]
@@ -727,6 +759,7 @@ public class ConcurrentPriorityQueueTests
     [InlineData(20)]
     [InlineData(50)]
     [InlineData(100)]
+    [InlineData(200)]
     public void EnqueueDequeue__КогдаВыполняютсяПоОчереди__ВРезультатеОчередьДолжнаБытьПуста(int iterationsCount)
     {
         var queue = CreateQueue();
