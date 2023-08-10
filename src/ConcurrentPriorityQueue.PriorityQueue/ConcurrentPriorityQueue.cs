@@ -1,16 +1,11 @@
-﻿using System.Buffers;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("ConcurrentPriorityQueue.PriorityQueue.Tests")]
 
 namespace ConcurrentPriorityQueue.PriorityQueue;
 
-// - Получить все элементы
-[SuppressMessage("ReSharper", "OutParameterValueIsAlwaysDiscarded.Global")]
-[SuppressMessage("ReSharper", "UnusedMember.Global")]
-[SuppressMessage("ReSharper", "UnusedMethodReturnValue.Global")]
-[SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
+// ReSharper disable MemberCanBePrivate.Global
 public class ConcurrentPriorityQueue<TKey, TValue>
 {
     /// <summary>
@@ -28,6 +23,9 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     /// Взял из головы
     /// </remarks>
     private const int DefaultHeight = 20;
+    
+    // private static ArrayPool<SkipListNode<TKey, TValue>> Pool => ArrayPool<SkipListNode<TKey, TValue>>.Shared;
+    private readonly ConcurrentQueue<SkipListNode<TKey, TValue>[]> _bufferPool;
 
     /// <summary>
     /// Получить текущее количество элементов в очереди.
@@ -99,18 +97,22 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 "Предел хранящихся удаленных элементов должен быть не меньше 2");
         }
         
-        ( _head, _tail ) = CreateHeadAndTail(height);
         _height = height;
         _deleteThreshold = deleteThreshold;
+        _bufferPool = new();
+        ( _head, _tail ) = CreateHeadAndTail(height);
         Comparer = comparer ?? Comparer<TKey>.Default;
     }
 
-    private static (SkipListNode<TKey, TValue> Head, SkipListNode<TKey, TValue> Tail) CreateHeadAndTail(int height)
+    private (SkipListNode<TKey, TValue> Head, SkipListNode<TKey, TValue> Tail) CreateHeadAndTail(int height)
     {
         var headSuccessors = new SkipListNode<TKey, TValue>[height];
         var tail = new SkipListNode<TKey, TValue>();
         Array.Fill(headSuccessors, tail);
-        var head = new SkipListNode<TKey, TValue>() {Successors = headSuccessors};
+        var head = new SkipListNode<TKey, TValue>()
+        {
+            Successors = headSuccessors,
+        };
         return ( head, tail );
     }
 
@@ -190,8 +192,8 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         // На данный момент, если newHead не null, то содержит узел, который был в процесссе вставки в момент обхода.
         newHead ??= currentHead;
 
-        taken = false;
         var updated = false;
+        taken = false;
         _head.UpdateLock.Enter(ref taken);
         try
         {
@@ -212,7 +214,15 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         }
 
         key = currentHead.Key;
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
+        {
+            currentHead.Key = default!;
+        }
         value = currentHead.Value;
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+        {
+            currentHead.Value = default!;
+        }
         return true;
     }
 
@@ -236,8 +246,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 pred = next;
                 next = pred.Successors[i];
             }
-
-            var taken = false;
+            
             var old = Interlocked.CompareExchange(ref _head.Successors[i], pred.Successors[i], savedHead);
             if (old == savedHead)
             {
@@ -246,6 +255,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public TValue Dequeue() => Dequeue(out _);
 
     public TValue Dequeue(out TKey key)
@@ -262,13 +272,14 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     {
         // 1. Аллоцируем память, под узел
         var height = _random.Next(1, _height);
+
         var node = new SkipListNode<TKey, TValue>()
         {
             Key = key, 
             Value = value, 
-            Successors = new SkipListNode<TKey, TValue>[height], Inserting = true
+            Successors = new SkipListNode<TKey, TValue>[height],
+            Inserting = true,
         };
-        
         // 2. Находим место, куда нужно вставить элемент
         var (predecessors, successors, lastDeleted) = GetInsertLocation(key);
         try
@@ -279,7 +290,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             {
                 node.Successors[0] = successors[0];
                 var pred = predecessors[0];
-
+                
                 var taken = false;
                 pred.UpdateLock.Enter(ref taken);
                 try
@@ -293,11 +304,14 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 }
                 finally
                 {
-                    if (taken) { pred.UpdateLock.Exit(); }
+                    if (taken)
+                    {
+                        pred.UpdateLock.Exit();
+                    }
                 }
 
-                ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(predecessors);
-                ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(successors);
+                ReturnBuffer(predecessors);
+                ReturnBuffer(successors);
 
                 // Заново рассчитываем предшественников и последователей
                 ( predecessors, successors, lastDeleted ) = GetInsertLocation(key);
@@ -307,8 +321,10 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             var i = 1;
             while (i < height)
             {
-                if (node.Deleted ||          // Узел удален в процессе вставки 
-                    successors[i].Deleted || // Узел дальше удален, соответсвенно и мы
+                if (node.Deleted
+                 || // Узел удален в процессе вставки 
+                    successors[i].Deleted
+                 || // Узел дальше удален, соответсвенно и мы
                     successors[i] == lastDeleted)
                 {
                     // Узел был удален в процессе вставки
@@ -318,12 +334,11 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 node.Successors[i] = successors[i];
 
                 var old = Interlocked.CompareExchange(ref predecessors[i].Successors[i], node, successors[i]);
-
                 if (old != successors[i])
                 {
                     // Кто-то другой изменил список, заходим на другой круг
-                    ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(successors);
-                    ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(predecessors);
+                    ReturnBuffer(successors);
+                    ReturnBuffer(predecessors);
                     ( successors, predecessors, lastDeleted ) = GetInsertLocation(key);
                     if (!ReferenceEquals(predecessors[0], node))
                     {
@@ -339,8 +354,8 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         }
         finally
         {
-            ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(successors);
-            ArrayPool<SkipListNode<TKey, TValue>>.Shared.Return(predecessors);
+            ReturnBuffer(successors);
+            ReturnBuffer(predecessors);
         }
     }
 
@@ -427,6 +442,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 TKey key = default!;
                 TValue value = default!;
                 var success = false;
+
                 var taken = false;
                 node.UpdateLock.Enter(ref taken);
                 try
@@ -460,10 +476,9 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         // Последний удаленный узел
         var lastDeleted = ( SkipListNode<TKey, TValue>? ) null;
         // Предшествующие узлы
-        var pool = ArrayPool<SkipListNode<TKey, TValue>>.Shared;
-        var predecessors = pool.Rent(_height);
+        var predecessors = RentBuffer();
         // Последующие узлы
-        var successors = pool.Rent(_height);
+        var successors = RentBuffer();
         try
         {
             var i = _height - 1;
@@ -490,18 +505,17 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 successors[i] = current;
                 i--;
             }
-
-            var queue = new PriorityQueue<int, int>();
             
             return ( predecessors, successors, lastDeleted );
         }
         catch (Exception)
         {
-            pool.Return(predecessors);
-            pool.Return(successors);
+            ReturnBuffer(predecessors);
+            ReturnBuffer(successors);
             throw;
         }
     }
+
 
     private bool IsTail(SkipListNode<TKey, TValue> node) => node == _tail;
 
@@ -537,5 +551,21 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         }
         
         return count;
+    }
+
+    private SkipListNode<TKey, TValue>[] RentBuffer()
+    {
+        if (_bufferPool.TryDequeue(out var buffer))
+        {
+            return buffer;
+        }
+
+        return new SkipListNode<TKey, TValue>[_height];
+    }
+    
+    private void ReturnBuffer(SkipListNode<TKey,TValue>[] buffer)
+    {
+        Array.Clear(buffer);
+        _bufferPool.Enqueue(buffer);
     }
 }

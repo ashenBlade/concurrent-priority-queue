@@ -33,7 +33,7 @@ public class UniformWorkloadBenchmark: IBenchmark
     private QueueBenchmarkResult BenchmarkConcurrent()
     {
         Console.WriteLine($"------ Равномерная нагрузка;  Ключи: {_keyStrategy.ArrangementType.GetFancyName()}; Конкурентная очередь --------");
-        var queue = new ConcurrentPriorityQueue<int, int>();
+        var queue = new ConcurrentPriorityQueue<int, int>(height: 30, deleteThreshold: 1000);
         var threads = new Thread[ThreadsCount];
         var operationsQueue = new ConcurrentQueue<(TimeSpan Duration, long OperationsCount)>();
         var eventSlim = new ManualResetEventSlim(false);
@@ -64,7 +64,7 @@ public class UniformWorkloadBenchmark: IBenchmark
             thread.Start();
             threads[i] = thread;
         }
-        Console.WriteLine($"Запускаю тесты");
+        Console.WriteLine($"Запускаю тесты для конкурентной реализации");
         cts.CancelAfter(_benchmarkDuration);
         eventSlim.Set();
         foreach (var thread in threads)
