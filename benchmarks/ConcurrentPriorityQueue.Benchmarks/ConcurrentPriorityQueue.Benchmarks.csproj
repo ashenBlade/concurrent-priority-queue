@@ -5,10 +5,15 @@
         <TargetFramework>net6.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <LangVersion>11</LangVersion>
     </PropertyGroup>
 
     <ItemGroup>
       <ProjectReference Include="..\..\src\ConcurrentPriorityQueue.PriorityQueue\ConcurrentPriorityQueue.PriorityQueue.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="BenchmarkDotNet" Version="0.13.7" />
     </ItemGroup>
 
 </Project>

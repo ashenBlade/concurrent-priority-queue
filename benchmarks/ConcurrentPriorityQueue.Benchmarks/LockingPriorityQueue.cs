@@ -3,7 +3,6 @@ namespace ConcurrentPriorityQueue.Benchmarks;
 public class LockingPriorityQueue<TKey, TValue>
 {
     private readonly PriorityQueue<TValue, TKey> _queue = new();
-    private SpinLock _lock = new();
 
     public void Enqueue(TKey key, TValue value)
     {
