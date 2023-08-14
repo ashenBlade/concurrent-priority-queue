@@ -1,6 +1,8 @@
-﻿
-
-using BenchmarkDotNet.Running;
+﻿using BenchmarkDotNet.Running;
 using ConcurrentPriorityQueue.Benchmarks;
 
-BenchmarkRunner.Run<PriorityQueueBenchmark>();
+BenchmarkRunner.Run(new[]
+{
+    typeof(ConcurrentPriorityQueueBenchmark),
+    typeof(LockingPriorityQueueBenchmark),
+});
