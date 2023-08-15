@@ -29,9 +29,9 @@ public class ConcurrentPriorityQueueBenchmark
 
     private IEnumerable<(int, int)> CreateQueueParameters()
     {
-        yield return ( 20, 10 );
-        yield return ( 50, 20 );
-        yield return ( 100, 30 );
+        yield return ( 32, 16 );
+        yield return ( 64, 32 );
+        yield return ( 128, 32 );
     }
 
     [ParamsSource(nameof(QueueParametersEnumerable))]
@@ -44,7 +44,7 @@ public class ConcurrentPriorityQueueBenchmark
     [ParamsAllValues]
     public WorkloadType WorkloadType { get; set; }
 
-    [Params(1, 2, 4, 6, 8, 10)]
+    [Params(1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20)]
     public int ThreadsCount { get; set; }
     
     [IterationSetup(Target = nameof(ConcurrentQueueBenchmark))]

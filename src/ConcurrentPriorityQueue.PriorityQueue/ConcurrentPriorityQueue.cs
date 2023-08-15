@@ -24,7 +24,29 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     /// </remarks>
     private const int DefaultHeight = 20;
     
-    // private static ArrayPool<SkipListNode<TKey, TValue>> Pool => ArrayPool<SkipListNode<TKey, TValue>>.Shared;
+    /// <summary>
+    /// Голова списка
+    /// </summary>
+    private readonly SkipListNode<TKey, TValue> _head;
+    
+    /// <summary>
+    /// Хвост списка
+    /// </summary>
+    private readonly SkipListNode<TKey, TValue> _tail;
+    
+    /// <summary>
+    /// Максимальная высота списка
+    /// </summary>
+    private int Height => _head.Successors.Length;
+    
+    /// <summary>
+    /// Максимальное количество хранимых логически удаленных узлов
+    /// </summary>
+    private readonly int _deleteThreshold;
+
+    /// <summary>
+    /// Пул для временных массивов, используемых во время вставки нового узла
+    /// </summary>
     private readonly ConcurrentQueue<SkipListNode<TKey, TValue>[]> _bufferPool;
 
     /// <summary>
@@ -42,7 +64,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         var count = 0;
         while (!IsTail(node))
         {
-            if (!node.Deleted)
+            if (!node.NextDeleted)
             {
                 count++;
             }
@@ -52,14 +74,6 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         return count;
     }
 
-    private readonly SkipListNode<TKey, TValue> _head;
-    private readonly SkipListNode<TKey, TValue> _tail;
-    
-    /// <summary>
-    /// Максимальная высота списка
-    /// </summary>
-    private readonly int _height;
-    
     /// <summary>
     /// <see cref="Random"/> для вычисления высоты списка
     /// </summary>
@@ -73,11 +87,6 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     /// </remarks>
     public IComparer<TKey> Comparer { get; }
 
-    /// <summary>
-    /// Максимальное количество хранимых логически удаленных узлов
-    /// </summary>
-    private readonly int _deleteThreshold;
-    
     public ConcurrentPriorityQueue(int height = DefaultHeight, int deleteThreshold = DefaultDeleteThreshold, IComparer<TKey>? comparer = null)
     {
         if (height < 1)
@@ -97,7 +106,6 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 "Предел хранящихся удаленных элементов должен быть не меньше 2");
         }
         
-        _height = height;
         _deleteThreshold = deleteThreshold;
         _bufferPool = new();
         ( _head, _tail ) = CreateHeadAndTail(height);
@@ -146,20 +154,20 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 newHead = currentHead;
             }
 
-            if (currentHead.Deleted)
+            if (currentHead.NextDeleted)
             {
                 deletedCount++;
                 currentHead = currentHead.Successors[0];
                 continue;
             }
-
+            
             taken = false;
             currentHead.UpdateLock.Enter(ref taken);
             try
             {
-                if (!currentHead.Deleted)
+                if (!currentHead.NextDeleted)
                 {
-                    currentHead.Deleted = true;
+                    currentHead.NextDeleted = true;
                     deletedCount++;
                     break;
                 }
@@ -189,7 +197,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             return true;
         }
 
-        // На данный момент, если newHead не null, то содержит узел, который был в процесссе вставки в момент обхода.
+        // На данный момент, если newHead не null, то содержит узел, который был в процессе вставки в момент обхода.
         newHead ??= currentHead;
 
         var updated = false;
@@ -210,7 +218,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
 
         if (updated)
         {
-            Restructure();
+            RemoveDeletedNodes();
         }
 
         key = currentHead.Key;
@@ -226,30 +234,42 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         return true;
     }
 
-    private void Restructure()
+    /// <summary>
+    /// Удалить ссылки на удаленные узлы из головы списка
+    /// </summary>
+    /// <remarks>
+    /// Удаление происходит только на верхних уровнях - первый не затрагивается
+    /// </remarks>
+    private void RemoveDeletedNodes()
     {
-        var i = _height - 1;
-        var pred = _head;
+        var i = Height - 1;
+        var previous = _head;
         while (i > 0)
         {
             // Запоминаем старую голову списка, чтобы при обновлении не задеть новую
             var savedHead = _head.Successors[i];
-            var next = pred.Successors[i];
-            if (!savedHead.Deleted)
+            if (!savedHead.NextDeleted)
             {
                 i--;
                 continue;
             }
+            
+            var next = previous.Successors[i];
 
-            while (next.Deleted)
+            // Находим последний удаленный узел
+            while (next.NextDeleted)
             {
-                pred = next;
-                next = pred.Successors[i];
+                previous = next;
+                next = previous.Successors[i];
             }
             
-            var old = Interlocked.CompareExchange(ref _head.Successors[i], pred.Successors[i], savedHead);
+            // Выставляем ссылку на следующий узел у головы списка
+            var old = Interlocked.CompareExchange(ref _head.Successors[i], previous.Successors[i], savedHead);
             if (old == savedHead)
             {
+                // Успешно обновили ссылку.
+                // Ссылка могла не обновиться если есть несколько конкурентных операций Restructure,
+                // в таком случае, просто повторяем операцию
                 i--;
             }
         }
@@ -271,7 +291,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
     public void Enqueue(TKey key, TValue value)
     {
         // 1. Аллоцируем память, под узел
-        var height = _random.Next(1, _height);
+        var height = _random.Next(1, Height);
 
         var node = new SkipListNode<TKey, TValue>()
         {
@@ -296,7 +316,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 try
                 {
                     if (pred.Successors[0] == successors[0]
-                     && !successors[0].Deleted)
+                     && !successors[0].NextDeleted)
                     {
                         pred.Successors[0] = node;
                         break;
@@ -321,9 +341,9 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             var i = 1;
             while (i < height)
             {
-                if (node.Deleted
+                if (node.NextDeleted
                  || // Узел удален в процессе вставки 
-                    successors[i].Deleted
+                    successors[i].NextDeleted
                  || // Узел дальше удален, соответсвенно и мы
                     successors[i] == lastDeleted)
                 {
@@ -371,7 +391,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 return false;
             }
 
-            if (successor.Deleted)
+            if (successor.NextDeleted)
             {
                 successor = successor.Successors[0];
                 continue;
@@ -381,7 +401,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             successor.UpdateLock.Enter(ref taken);
             try
             {
-                if (!successor.Deleted)
+                if (!successor.NextDeleted)
                 {
                     key = successor.Key;
                     value = successor.Value;
@@ -427,7 +447,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
 
         while (!IsTail(node))
         {
-            node.Deleted = true;
+            node.NextDeleted = true;
             node = node.Successors[0];
         }
     }
@@ -437,7 +457,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         var node = _head.Successors[0];
         while (!IsTail(node))
         {
-            if (!node.Deleted)
+            if (!node.NextDeleted)
             {
                 TKey key = default!;
                 TValue value = default!;
@@ -447,7 +467,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
                 node.UpdateLock.Enter(ref taken);
                 try
                 {
-                    if (!node.Deleted)
+                    if (!node.NextDeleted)
                     {
                         key = node.Key;
                         value = node.Value;
@@ -469,42 +489,69 @@ public class ConcurrentPriorityQueue<TKey, TValue>
         }
     }
 
-    // Для заданного ключа получить список всех ближайших левых (ключ меньше) узлов
+    /// <summary>
+    /// Для заданного ключа получить список всех ближайших левых (ключ меньше) узлов
+    /// </summary>
     private (SkipListNode<TKey, TValue>[] Predecessors, SkipListNode<TKey, TValue>[] Successors, SkipListNode<TKey, TValue>? LastDeleted) GetInsertLocation(TKey key)
     {
-        var pred = _head;
-        // Последний удаленный узел
-        var lastDeleted = ( SkipListNode<TKey, TValue>? ) null;
+        var previous = _head;
         // Предшествующие узлы
         var predecessors = RentBuffer();
         // Последующие узлы
         var successors = RentBuffer();
         try
         {
-            var i = _height - 1;
-            while (0 <= i)
+            // Логика работы для верхних уровней и первого разделена для оптимизации работы,
+            // т.к. проверка на i == 0 на верхних не нужна (всегда false)
+            SkipListNode<TKey, TValue> current;
+            
+            // Итерируемся по верхним уровням
+            for (int i = Height - 1; i >= 1; i--)
             {
-                var current = pred.Successors[i];
-                while (!IsTail(current) && 
-                       (
-                           IsLessOrEqualThan(current.Key, key)
-                        || current.Deleted
-                        || ( pred.Deleted && i == 0 ) )
-                      )
+                current = previous.Successors[i];
+                while (
+                    !IsTail(current) && 
+                    (
+                        // current.Key <= key
+                        IsLessOrEqualThan(current.Key, key) 
+                     || current.NextDeleted)
+                    )
                 {
-                    if (pred.Deleted && i == 0)
-                    {
-                        lastDeleted = current;
-                    }
-
-                    pred = current;
-                    current = pred.Successors[i];
+                    previous = current;
+                    current = previous.Successors[i];
                 }
 
-                predecessors[i] = pred;
+                predecessors[i] = previous;
                 successors[i] = current;
-                i--;
             }
+            
+            // Последний удаленный узел
+            var lastDeleted = ( SkipListNode<TKey, TValue>? ) null;
+            
+            // Итерируемся по первому уровню. 
+            // Главное - найти последний удаленный узел префикса
+            current = previous.Successors[0];
+            while (
+                !IsTail(current) && 
+                (
+                    // current.Key <= key
+                    IsLessOrEqualThan(current.Key, key) 
+                 || current.NextDeleted
+                 || previous.NextDeleted )
+                )
+            {
+                if (previous.NextDeleted)
+                {
+                    // Запоминаем последний удаленный узел из префикса
+                    lastDeleted = current;
+                }
+
+                previous = current;
+                current = previous.Successors[0];
+            }
+
+            predecessors[0] = previous;
+            successors[0] = current;
             
             return ( predecessors, successors, lastDeleted );
         }
@@ -560,7 +607,7 @@ public class ConcurrentPriorityQueue<TKey, TValue>
             return buffer;
         }
 
-        return new SkipListNode<TKey, TValue>[_height];
+        return new SkipListNode<TKey, TValue>[Height];
     }
     
     private void ReturnBuffer(SkipListNode<TKey,TValue>[] buffer)

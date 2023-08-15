@@ -32,7 +32,7 @@ public class LockingPriorityQueueBenchmark
     [ParamsAllValues]
     public WorkloadType WorkloadType { get; set; }
 
-    [Params(1, 2, 4, 6, 8, 10)]
+    [Params(1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20)]
     public int ThreadsCount { get; set; }
 
     [IterationSetup]

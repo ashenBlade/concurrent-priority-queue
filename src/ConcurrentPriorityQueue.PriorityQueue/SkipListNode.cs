@@ -21,7 +21,7 @@ internal class SkipListNode<TKey, TValue>
     /// <summary>
     /// Узел логически удален
     /// </summary>
-    public volatile bool Deleted;
+    public volatile bool NextDeleted;
     
     /// <summary>
     /// Узел находится в процессе вставки
